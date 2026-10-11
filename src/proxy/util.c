@@ -219,12 +219,12 @@ void console_show(void)
 {
     if (console_out) return;
     if (!AllocConsole()) AttachConsole(ATTACH_PARENT_PROCESS);
-    SetConsoleTitleW(L"Midnight Suns suit registry");
+    SetConsoleTitleW(L"MMS Registry");
     console_out = CreateFileW(L"CONOUT$", GENERIC_WRITE, FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, NULL);
     if (console_out == INVALID_HANDLE_VALUE) console_out = NULL;
     if (console_out) {
         DWORD w;
-        WriteConsoleW(console_out, L"Updating the suit registry, the game starts right after...\r\n", 60, &w, NULL);
+        WriteConsoleW(console_out, L"Updating the MMS Registry, the game starts right after...\r\n", 59, &w, NULL);
     }
 }
 

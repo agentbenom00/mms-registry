@@ -1,24 +1,28 @@
-# Midnight Suns Suit Registry
+# MMS Registry
 
-A single-file mod for **Marvel's Midnight Suns** that lets any number of new suit and palette mods work side by
-side. Drop `version.dll` into the game folder once; from then on, adding or removing suit/palette paks just works,
-on Steam and Epic.
+*Formerly the Midnight Suns Suit Registry.*
+
+A single-file mod for **Marvel's Midnight Suns** that adds **new hero slots, new suit slots and new palette slots**,
+so any number of hero, suit and palette mods work side by side. Drop `version.dll` into the game folder once; from
+then on, adding or removing those mods' paks just works, on Steam and Epic.
 
 ## Why
 
-Midnight Suns only shows outfits and palettes that are listed in its asset registry
+Midnight Suns only finds heroes, outfits and palettes that are listed in its asset registry
 (`CodaGame/AssetRegistry*.bin`, a main file plus 8 language variants), and there is only one registry. A mod that
-adds a new suit has to ship a patched registry, so two such mods overwrite each other and only one shows up.
+adds a new hero, suit or palette has to ship a patched registry, so two such mods overwrite each other and only one
+shows up.
 
 This mod builds one shared registry, `zz_MidnightSuns_SuitRegistry_P.pak`, from the game's own registry plus every
-installed suit or palette mod, and keeps it up to date by itself at every launch.
+installed hero, suit or palette mod, and keeps it up to date by itself at every launch. (The pak, folder and manifest
+names still say "SuitRegistry"/"SuitMods": they are kept so that mods and tools made for the old name keep working.)
 
 ## Install (players)
 
 1. Download the latest release zip.
 2. Drag its `MidnightSuns` folder into the game folder (the one with `MidnightSuns.exe`) and let it merge. This puts
    `version.dll` in `<game>\MidnightSuns\Binaries\Win64\`.
-3. Put suit/palette mod paks in `<game>\MidnightSuns\Content\Paks\` (or a subfolder such as `~mods`) as usual and
+3. Put hero/suit/palette mod paks in `<game>\MidnightSuns\Content\Paks\` (or a subfolder such as `~mods`) as usual and
    start the game.
 
 Linux (Proton): also set the Steam launch options to `WINEDLLOVERRIDES="version=n,b" %command%`
@@ -34,7 +38,7 @@ See [README.txt](README.txt) (shipped in the zip) for the details players need.
 
 ## For mod authors
 
-A suit or palette pak carries a manifest at `CodaGame/SuitMods/<id>.json` (the game ignores it):
+A hero, suit or palette pak carries a manifest at `CodaGame/SuitMods/<id>.json` (the game ignores it):
 
 ```json
 {"format": 1, "id": "Venom_SpaceKnight", "title": "Space Knight (Venom)",
@@ -49,7 +53,10 @@ A suit or palette pak carries a manifest at `CodaGame/SuitMods/<id>.json` (the g
 - A source can also be `{"source": path, "rules": [...]}` with its own rules, to clone one donor more than once
   (e.g. extra palettes made from one original palette).
 - `id` must be unique. A manifest without an outfit that only adds palettes counts as a palette mod;
-  `"kind": "suit"` / `"palette"` overrides that.
+  `"kind": "suit"` / `"palette"` overrides that. A new playable character sets `"kind": "hero"`; the log then
+  counts it as a hero ("1 hero, 2 suits and 1 palette").
+- Hero mods: registry entries of blueprint classes (`*_BP`) and montage sets can't be cloned yet. Leave them out of
+  `sources`; they load through direct references.
 - Don't ship `AssetRegistry*.bin` files in your pak; the shared registry replaces them.
 - New items need their own `EntitlementID`s and must be free (`bRequirePurchase` false; mod items can't be bought);
   new outfits also need `bUnlockedAtGameStart` true.
@@ -83,7 +90,7 @@ A suit or palette pak carries a manifest at `CodaGame/SuitMods/<id>.json` (the g
 Cross-compiled from Linux with [zig](https://ziglang.org/) 0.13:
 
 ```sh
-./build.sh      # -> dist/MidnightSuns-SuitRegistry.zip (MidnightSuns/Binaries/Win64/version.dll + README.txt)
+./build.sh      # -> dist/MidnightSuns-MMSRegistry.zip (MidnightSuns/Binaries/Win64/version.dll + README.txt)
 ```
 
 `build.sh` looks for zig in `~/Tools/zig-linux-x86_64-*`; set `ZIG=/path/to/zig` otherwise. `update.sh` is a Linux

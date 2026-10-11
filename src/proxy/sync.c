@@ -1,4 +1,4 @@
-// Keep zz_MidnightSuns_SuitRegistry_P.pak in sync with the installed suit paks.
+// Keep zz_MidnightSuns_SuitRegistry_P.pak in sync with the installed hero, suit and palette paks.
 //
 // Midnight Suns finds outfits/palettes only through its one AssetRegistry (CodaGame/AssetRegistry*.bin, main + 8
 // languages), so every standalone suit has to be registered in the same patched copy. Each suit pak carries a
@@ -20,6 +20,7 @@ typedef struct {
     ruleset rules;
     char **keep; int nkeep;
     int is_palette;                                             // only adds palettes (no outfit): a "palette" mod
+    int is_hero;                                                // "kind": "hero": a new playable character
     int npal;                                                   // palettes it registers
 } manifest;
 
@@ -68,10 +69,10 @@ static char **str_array(json *a, int *n, const char *what, const char *pak)
 {
     *n = 0;
     if (!a) return NULL;
-    if (a->t != J_ARR) sr_fail("%s: \"%s\" in its suit manifest must be a list", pak, what);
+    if (a->t != J_ARR) sr_fail("%s: \"%s\" in its manifest must be a list", pak, what);
     char **v = xmalloc(sizeof(char *) * (a->n + 1));
     for (int i = 0; i < a->n; i++) {
-        if (a->items[i]->t != J_STR) sr_fail("%s: \"%s\" in its suit manifest must hold text", pak, what);
+        if (a->items[i]->t != J_STR) sr_fail("%s: \"%s\" in its manifest must hold text", pak, what);
         v[i] = xstrdup(a->items[i]->s);
     }
     *n = a->n;
@@ -80,13 +81,13 @@ static char **str_array(json *a, int *n, const char *what, const char *pak)
 
 static void parse_rules(json *rules, ruleset *rs, const char *pak)
 {
-    if (!rules || rules->t != J_ARR) sr_fail("%s: its suit manifest has no \"rules\" list", pak);
+    if (!rules || rules->t != J_ARR) sr_fail("%s: its manifest has no \"rules\" list", pak);
     rs->from = xmalloc(sizeof(char *) * (rules->n + 1));
     rs->to = xmalloc(sizeof(char *) * (rules->n + 1));
     for (int i = 0; i < rules->n; i++) {
         json *r = rules->items[i];
         if (r->t != J_ARR || r->n != 2 || r->items[0]->t != J_STR || r->items[1]->t != J_STR || !r->items[0]->s[0])
-            sr_fail("%s: each rule in its suit manifest must be [\"old\", \"new\"]", pak);
+            sr_fail("%s: each rule in its manifest must be [\"old\", \"new\"]", pak);
         rs->from[i] = xstrdup(r->items[0]->s);
         rs->to[i] = xstrdup(r->items[1]->s);
     }
@@ -97,14 +98,14 @@ static void parse_manifest(manifest *m, const uint8_t *data, size_t n, const cha
 {
     memset(m, 0, sizeof *m);
     json *j = json_parse((const char *)data, n);
-    if (!j || j->t != J_OBJ) sr_fail("%s: its suit manifest is not valid JSON", pak);
+    if (!j || j->t != J_OBJ) sr_fail("%s: its manifest is not valid JSON", pak);
     json *id = json_get(j, "id"), *title = json_get(j, "title"), *src = json_get(j, "sources");
-    if (!id || id->t != J_STR || !id->s[0]) sr_fail("%s: its suit manifest has no \"id\"", pak);
+    if (!id || id->t != J_STR || !id->s[0]) sr_fail("%s: its manifest has no \"id\"", pak);
     m->id = xstrdup(id->s);
     m->title = xstrdup(title && title->t == J_STR ? title->s : id->s);
     m->pak = xstrdup(pak);
     snprintf(m->hash, sizeof m->hash, "%016llx", (unsigned long long)fnv1a64(data, n));
-    if (!src || src->t != J_ARR || !src->n) sr_fail("%s: its suit manifest has no \"sources\"", pak);
+    if (!src || src->t != J_ARR || !src->n) sr_fail("%s: its manifest has no \"sources\"", pak);
     m->nsrc = src->n;
     m->sources = xmalloc(sizeof(char *) * (src->n + 1));
     m->src_rules = xcalloc(src->n + 1, sizeof(ruleset));
@@ -121,15 +122,17 @@ static void parse_manifest(manifest *m, const uint8_t *data, size_t n, const cha
     m->keep = str_array(json_get(j, "keep"), &m->nkeep, "keep", pak);
     parse_rules(json_get(j, "rules"), &m->rules, pak);
     // suit or palette: a manifest without an outfit (TacticalOutfits/...) that registers palettes is a palette mod;
-    // "kind": "suit" / "palette" in the manifest overrides the guess
+    // "kind": "suit" / "palette" / "hero" in the manifest overrides the guess (a hero is never guessed)
     int outfits = 0;
     for (int i = 0; i < m->nsrc; i++) {
         outfits += strstr(m->sources[i], "/TacticalOutfits/") != NULL;
         m->npal += strstr(m->sources[i], "HeroSkinPalette") != NULL;
     }
     json *kind = json_get(j, "kind");
-    if (kind && kind->t == J_STR) m->is_palette = !_stricmp(kind->s, "palette");
-    else m->is_palette = outfits == 0 && m->npal > 0;
+    if (kind && kind->t == J_STR) {
+        m->is_palette = !_stricmp(kind->s, "palette");
+        m->is_hero = !_stricmp(kind->s, "hero");
+    } else m->is_palette = outfits == 0 && m->npal > 0;
     if (m->is_palette && !m->npal) m->npal = 1;
     json_free(j);
 }
@@ -216,6 +219,8 @@ static void collect_paks(const wchar_t *paks, const wchar_t *rel, int depth, wch
     } while (FindNextFileW(f, &fd));
     FindClose(f);
 }
+
+static const char *kind_name(const manifest *m) { return m->is_hero ? "hero" : m->is_palette ? "palette" : "suit"; }
 
 // Scan the Paks folder. full = 0: in DllMain (no AES/Oodle/threads); anything unusual sets unsure.
 static void scan(const wchar_t *paks, int full, scan_result *s)
@@ -316,7 +321,7 @@ static char *expected_state(scan_result *s)
         buf_u8(&b, ',');
         json_str(&b, v[i]->hash);
         buf_u8(&b, ',');
-        json_str(&b, v[i]->is_palette ? "palette" : "suit");
+        json_str(&b, kind_name(v[i]));
         buf_u8(&b, ',');
         json_str(&b, v[i]->title);
         buf_u8(&b, ']');
@@ -374,7 +379,7 @@ int sync_quick_check(const wchar_t *paks)
         log_open();                                             // (file writes only: fine under the loader lock)
         log_msg("Paks folder: %ls", paks);
         for (int i = 0; i < s.nwarn; i++) log_msg("warning: %s", s.warn[i]);
-        log_msg("no suit or palette paks found (searched its subfolders too) - nothing to do");
+        log_msg("no hero, suit or palette paks found (searched its subfolders too) - nothing to do");
         return 0;
     }
     char *want = expected_state(&s);
@@ -386,18 +391,25 @@ int sync_quick_check(const wchar_t *paks)
 
 // ---------------------------------------------------------------- full sync
 
-// "2 suits and 1 palette"
+// "1 hero, 2 suits and 1 palette"
 static void summary(scan_result *s, char *out, size_t n)
 {
-    int suits = 0, pals = 0;
+    int cnt[3] = {0};
+    static const char *const word[3] = {"hero", "suit", "palette"};
     for (int i = 0; i < s->n; i++) {
-        if (s->m[i].is_palette) pals += s->m[i].npal;
-        else suits++;
+        if (s->m[i].is_hero) cnt[0]++;
+        else if (s->m[i].is_palette) cnt[2] += s->m[i].npal;
+        else cnt[1]++;
     }
-    char a[32] = "", b[32] = "";
-    if (suits) snprintf(a, sizeof a, "%d suit%s", suits, suits == 1 ? "" : "s");
-    if (pals) snprintf(b, sizeof b, "%d palette%s", pals, pals == 1 ? "" : "s");
-    snprintf(out, n, "%s%s%s", a, suits && pals ? " and " : "", b);
+    int parts = (cnt[0] > 0) + (cnt[1] > 0) + (cnt[2] > 0), done = 0;
+    *out = 0;
+    for (int k = 0; k < 3; k++) {
+        if (!cnt[k]) continue;
+        size_t l = strlen(out);
+        snprintf(out + l, n - l, "%s%d %s%s", done ? (done == parts - 1 ? " and " : ", ") : "", cnt[k], word[k],
+                 cnt[k] == 1 ? "" : (k == 0 ? "es" : "s"));
+        done++;
+    }
 }
 
 typedef struct { char *path; pak *pk; pak_entry *e; } bin_src;
@@ -534,7 +546,7 @@ static void log_changes(const char *have, scan_result *s)
     if (strcmp((char *)g.p, (char *)s->game.p)) { log_msg("update needed: game files changed (game update?)"); any = 1; }
     buf_free(&g);
     for (int i = 0; i < s->n; i++) {
-        const char *kind = s->m[i].is_palette ? "palette" : "suit";
+        const char *kind = kind_name(&s->m[i]);
         json *hit = NULL;
         for (int k = 0; k < suits->n; k++) {
             json *e = suits->items[k];
@@ -568,13 +580,13 @@ int sync_run(const wchar_t *paks, int interactive)
     for (int i = 0; i < s.n; i++)
         for (int k = i + 1; k < s.n; k++)
             if (!strcmp(s.m[i].id, s.m[k].id))
-                sr_fail("suit id %s is in two paks: %s and %s - remove one", s.m[i].id, s.m[i].pak, s.m[k].pak);
+                sr_fail("mod id %s is in two paks: %s and %s - remove one", s.m[i].id, s.m[i].pak, s.m[k].pak);
     char what[80];
     summary(&s, what, sizeof what);
     if (s.n) log_msg("found %s:", what);
-    else log_msg("no suit or palette paks found");
+    else log_msg("no hero, suit or palette paks found");
     for (int i = 0; i < s.n; i++)
-        log_msg("  %-8s %-30s %s", s.m[i].is_palette ? "palette" : "suit", s.m[i].title, s.m[i].pak);
+        log_msg("  %-8s %-30s %s", kind_name(&s.m[i]), s.m[i].title, s.m[i].pak);
     int exists;
     char *have = installed_state(paks, &exists), *want = expected_state(&s);
     if (s.n == 0) {
@@ -588,7 +600,7 @@ int sync_run(const wchar_t *paks, int interactive)
             sr_fail("could not remove the registry pak (error %lu)", e);
         }
         free(p);
-        log_msg("removed the registry pak (no suits or palettes installed)");
+        log_msg("removed the registry pak (no heroes, suits or palettes installed)");
         return 0;
     }
     if (have && !strcmp(have, want)) { log_msg("registry is up to date - nothing to do"); return 0; }

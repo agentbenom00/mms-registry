@@ -1,4 +1,4 @@
-// Midnight Suns suit registry, all inside version.dll. Shared declarations.
+// MMS Registry (Midnight Suns), all inside version.dll. Shared declarations.
 #pragma once
 #define WIN32_LEAN_AND_MEAN
 #define UNICODE

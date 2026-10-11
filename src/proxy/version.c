@@ -1,4 +1,5 @@
-// version.dll for Marvel's Midnight Suns: keeps the suit registry pak in sync, every time the game starts.
+// MMS Registry: version.dll for Marvel's Midnight Suns. Keeps the shared registry pak (new hero, suit and palette
+// slots) in sync, every time the game starts.
 //
 // MidnightSuns-Win64-Shipping.exe imports version.dll and Windows looks next to the exe first, so this DLL loads
 // before the engine starts (long before it mounts the paks). Its 17 exports lead to the real implementations (see
@@ -64,7 +65,7 @@ static void message(const wchar_t *text, int error)
     HMODULE u = LoadLibraryW(L"user32.dll");
     typedef int (WINAPI *mb_t)(HWND, LPCWSTR, LPCWSTR, UINT);
     mb_t mb = u ? (mb_t)GetProcAddress(u, "MessageBoxW") : NULL;
-    if (mb) mb(NULL, text, L"Midnight Suns suit registry", (error ? MB_ICONERROR : MB_ICONINFORMATION) | MB_SETFOREGROUND);
+    if (mb) mb(NULL, text, L"MMS Registry", (error ? MB_ICONERROR : MB_ICONINFORMATION) | MB_SETFOREGROUND);
 }
 
 static int run_elevated(const wchar_t *args)
@@ -152,7 +153,7 @@ void CALLBACK SuitRegistrySyncW(HWND hwnd, HINSTANCE hinst, LPWSTR cmd, int show
             wchar_t *w = utf8_to_w(sr_error);
             static wchar_t text[2048];
             swprintf(text, 2048, L"%ls\n\n%lsLog: %ls\\SuitRegistry.log", w,
-                     from_game ? L"The game will start, but suit changes were not applied.\n\n" : L"", data_dir());
+                     from_game ? L"The game will start, but hero/suit/palette changes were not applied.\n\n" : L"", data_dir());
             message(text, 1);
         }
         rc = 3;
