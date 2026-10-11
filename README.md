@@ -18,7 +18,8 @@ installed suit or palette mod, and keeps it up to date by itself at every launch
 1. Download the latest release zip.
 2. Drag its `MidnightSuns` folder into the game folder (the one with `MidnightSuns.exe`) and let it merge. This puts
    `version.dll` in `<game>\MidnightSuns\Binaries\Win64\`.
-3. Put suit/palette mod paks in `<game>\MidnightSuns\Content\Paks\` as usual and start the game.
+3. Put suit/palette mod paks in `<game>\MidnightSuns\Content\Paks\` (or a subfolder such as `~mods`) as usual and
+   start the game.
 
 Linux (Proton): also set the Steam launch options to `WINEDLLOVERRIDES="version=n,b" %command%`
 (Heroic: environment variable `WINEDLLOVERRIDES` = `version=n,b`).

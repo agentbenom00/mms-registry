@@ -180,24 +180,50 @@ static int mod_filter(const char *dir, const char *name, void *ctx)
     return n > 5 && !_stricmp(name + n - 5, ".json");
 }
 
+static const wchar_t *file_name(const wchar_t *path)
+{
+    const wchar_t *last = path;
+    for (const wchar_t *p = path; *p; p++)
+        if (*p == L'\\') last = p + 1;
+    return last;
+}
+
+// *.pak files in the Paks folder and its subfolders (e.g. ~mods: the game mounts those too), as paths relative to
+// it. Game paks count only at the top level; copies of them elsewhere (backups) are skipped by the caller.
+static void collect_paks(const wchar_t *paks, const wchar_t *rel, int depth, wchar_t ***names, int *nn)
+{
+    wchar_t *dir = *rel ? wpath(paks, rel) : _wcsdup(paks), *pat = wpath(dir, L"*");
+    WIN32_FIND_DATAW fd;
+    HANDLE f = FindFirstFileW(pat, &fd);
+    free(pat);
+    free(dir);
+    if (f == INVALID_HANDLE_VALUE) return;
+    do {
+        const wchar_t *n = fd.cFileName;
+        wchar_t *r = *rel ? wpath(rel, n) : _wcsdup(n);
+        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+            if (wcscmp(n, L".") && wcscmp(n, L"..") && depth < 4 && !(fd.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT))
+                collect_paks(paks, r, depth + 1, names, nn);
+        } else {
+            size_t l = wcslen(n);
+            if (l > 4 && !_wcsicmp(n + l - 4, L".pak")) {
+                *names = xrealloc(*names, sizeof(wchar_t *) * (*nn + 1));
+                (*names)[(*nn)++] = r;
+                r = NULL;
+            }
+        }
+        free(r);
+    } while (FindNextFileW(f, &fd));
+    FindClose(f);
+}
+
 // Scan the Paks folder. full = 0: in DllMain (no AES/Oodle/threads); anything unusual sets unsure.
 static void scan(const wchar_t *paks, int full, scan_result *s)
 {
     memset(s, 0, sizeof *s);
-    wchar_t *pat = wpath(paks, L"*.pak");
-    WIN32_FIND_DATAW fd;
-    HANDLE f = FindFirstFileW(pat, &fd);
-    free(pat);
     wchar_t **names = NULL;
     int nn = 0;
-    if (f != INVALID_HANDLE_VALUE) {
-        do {
-            if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
-            names = xrealloc(names, sizeof(wchar_t *) * (nn + 1));
-            names[nn++] = _wcsdup(fd.cFileName);
-        } while (FindNextFileW(f, &fd));
-        FindClose(f);
-    }
+    collect_paks(paks, L"", 0, &names, &nn);
     qsort(names, nn, sizeof *names, cmp_wstr);
     buf_u8(&s->game, '[');
     int ngame = 0;
@@ -216,7 +242,7 @@ static void scan(const wchar_t *paks, int full, scan_result *s)
                 snprintf(t, sizeof t, ",%llu,%lld]", (unsigned long long)size, (long long)(ft / 10000000ull) - 11644473600ll);
                 buf_put(&s->game, t, strlen(t));
             }
-        } else if (_wcsicmp(names[i], REG_PAK)) {
+        } else if (_wcsicmp(names[i], REG_PAK) && !is_game_pak(file_name(names[i]))) {
             jmp_buf j, *outer = sr_jmp;
             static pak pk;
             pak_entry *volatile e = NULL;
@@ -343,7 +369,14 @@ int sync_quick_check(const wchar_t *paks)
     if (s.unsure) return 1;
     int exists;
     char *have = installed_state(paks, &exists);
-    if (s.n == 0) return exists;                                // suits all removed: delete the registry pak
+    if (s.n == 0) {
+        if (exists) return 1;                                   // suits all removed: delete the registry pak
+        log_open();                                             // (file writes only: fine under the loader lock)
+        log_msg("Paks folder: %ls", paks);
+        for (int i = 0; i < s.nwarn; i++) log_msg("warning: %s", s.warn[i]);
+        log_msg("no suit or palette paks found (searched its subfolders too) - nothing to do");
+        return 0;
+    }
     char *want = expected_state(&s);
     int differ = !have || strcmp(have, want);
     free(have);

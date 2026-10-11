@@ -14,7 +14,7 @@
 #include <tlhelp32.h>
 
 // found by `strings` / tools to tell this DLL apart from other mods' version.dll
-__attribute__((used)) const char suit_registry_marker[] = "MidnightSunsSuitRegistryProxy v3";
+__attribute__((used)) const char suit_registry_marker[] = "MidnightSunsSuitRegistryProxy v4";
 
 HINSTANCE sr_self;
 

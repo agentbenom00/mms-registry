@@ -25,6 +25,7 @@ Uninstall: delete version.dll (and zz_MidnightSuns_SuitRegistry_P.pak in Content
 WHAT TO EXPECT
 --------------
 - Every launch it checks the suit paks first; when nothing changed you won't notice it.
+- Suit paks can be in Content\Paks or any subfolder of it (e.g. Content\Paks\~mods).
 - When something changed (suit added/removed/updated, or a game update), a small window shows the rebuild for about
   10 seconds before the game starts.
 - The very first rebuild downloads the Oodle decompression library once (needed to read the game's files). Offline?
