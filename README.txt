@@ -22,7 +22,7 @@ Linux (Proton) only: also set the game's Steam launch options to
     WINEDLLOVERRIDES="version=n,b" %command%
 (Heroic: game settings > Advanced > environment variables: WINEDLLOVERRIDES = version=n,b)
 
-Uninstall: delete version.dll (and zz_MidnightSuns_SuitRegistry_P.pak in Content\Paks if you remove all hero/suit/palette mods).
+Uninstall: delete version.dll (and zz_MidnightSuns_SuitRegistry_P.pak in Content\Paks if you remove all the mods it registers).
 
 
 WHAT TO EXPECT
@@ -52,9 +52,12 @@ Each hero, suit or palette pak carries a manifest at  CodaGame/SuitMods/<id>.jso
 "sources" are the original (donor) registry entries: the outfit, its palettes, meshes, physics, materials and
 textures. Each one is cloned with "rules" applied in order to every name ([old, new] text replacements); names
 containing a "keep" string are left unchanged. "id" must be unique. Don't ship AssetRegistry files in your pak.
-A manifest without an outfit that only adds palettes counts as a palette mod ("2 suits and 1 palette");
-"kind": "suit" or "palette" overrides that. A new playable character sets "kind": "hero" ("1 hero, 2 suits and
-1 palette"). The folder name SuitMods is kept for all kinds, so existing mods work unchanged.
+A manifest without an outfit counts as a palette mod if it adds palettes, else as a card mod if it adds cards
+(Items/Gear/...); palette and card mods count what they add ("2 suits, 1 palette and 3 cards"). "kind": "suit",
+"palette" or "cards" overrides that. A new playable character sets "kind": "hero", a new enemy faction
+"kind": "faction" and a new Mirror Table region "kind": "region"; the log counts each kind on its own ("1 hero,
+2 suits, 1 palette, 3 cards, 1 faction and 1 region"). Any other "kind" counts as a suit. The folder name SuitMods
+is kept for all kinds, so existing mods work unchanged.
 Hero mods: blueprint classes (*_BP) and montage sets can't be cloned yet; leave them out of "sources" (they load
 through direct references).
 

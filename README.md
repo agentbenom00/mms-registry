@@ -52,9 +52,11 @@ A hero, suit or palette pak carries a manifest at `CodaGame/SuitMods/<id>.json` 
   at your packages. Names containing a `keep` string stay unchanged.
 - A source can also be `{"source": path, "rules": [...]}` with its own rules, to clone one donor more than once
   (e.g. extra palettes made from one original palette).
-- `id` must be unique. A manifest without an outfit that only adds palettes counts as a palette mod;
-  `"kind": "suit"` / `"palette"` overrides that. A new playable character sets `"kind": "hero"`; the log then
-  counts it as a hero ("1 hero, 2 suits and 1 palette").
+- `id` must be unique. A manifest without an outfit counts as a palette mod if it adds palettes, else as a card mod
+  if it adds cards (`Items/Gear/...`); palette and card mods count what they add. `"kind": "suit"` / `"palette"` /
+  `"cards"` overrides that. A new playable character sets `"kind": "hero"`, a new enemy faction `"kind": "faction"`
+  and a new Mirror Table region `"kind": "region"`; the log counts each kind on its own ("1 hero, 2 suits,
+  1 palette, 3 cards, 1 faction and 1 region"). Any other `kind` counts as a suit.
 - Hero mods: registry entries of blueprint classes (`*_BP`) and montage sets can't be cloned yet. Leave them out of
   `sources`; they load through direct references.
 - Don't ship `AssetRegistry*.bin` files in your pak; the shared registry replaces them.

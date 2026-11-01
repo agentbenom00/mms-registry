@@ -1,4 +1,5 @@
-// Keep zz_MidnightSuns_SuitRegistry_P.pak in sync with the installed hero, suit and palette paks.
+// Keep zz_MidnightSuns_SuitRegistry_P.pak in sync with the installed hero, suit, palette, card, faction and region
+// paks.
 //
 // Midnight Suns finds outfits/palettes only through its one AssetRegistry (CodaGame/AssetRegistry*.bin, main + 8
 // languages), so every standalone suit has to be registered in the same patched copy. Each suit pak carries a
@@ -13,15 +14,24 @@
 
 typedef struct { char **from, **to; int n; } ruleset;
 
+// what a mod adds, in the order the summary counts them: the "kind" in its manifest (also its word in the log and the
+// state), then the count's singular and plural ("4 cards": palette and card mods count what they add)
+enum { K_HERO, K_SUIT, K_PALETTE, K_CARDS, K_FACTION, K_REGION, K_COUNT };
+static const char *const kind_word[K_COUNT][3] = {
+    {"hero", "hero", "heroes"}, {"suit", "suit", "suits"}, {"palette", "palette", "palettes"},
+    {"cards", "card", "cards"}, {"faction", "faction", "factions"}, {"region", "region", "regions"}};
+#define ALL_KINDS "hero, suit, palette, card, faction or region"
+
 typedef struct {
     char *id, *title, *pak, hash[17];
     char **sources; int nsrc;
     ruleset *src_rules;                                         // per source; n < 0 = use the global rules
     ruleset rules;
     char **keep; int nkeep;
-    int is_palette;                                             // only adds palettes (no outfit): a "palette" mod
-    int is_hero;                                                // "kind": "hero": a new playable character
+    int kind;                                                   // K_*: a new playable character, suit, palettes only,
+                                                                // cards, a new enemy faction or Mirror Table region
     int npal;                                                   // palettes it registers
+    int ncards;                                                 // cards (Items/Gear/...) it registers
 } manifest;
 
 typedef struct {
@@ -121,19 +131,25 @@ static void parse_manifest(manifest *m, const uint8_t *data, size_t n, const cha
     }
     m->keep = str_array(json_get(j, "keep"), &m->nkeep, "keep", pak);
     parse_rules(json_get(j, "rules"), &m->rules, pak);
-    // suit or palette: a manifest without an outfit (TacticalOutfits/...) that registers palettes is a palette mod;
-    // "kind": "suit" / "palette" / "hero" in the manifest overrides the guess (a hero is never guessed)
+    // "kind": "hero" / "suit" / "palette" / "cards" (or "card") / "faction" / "region" in the manifest. Without one,
+    // a manifest without an outfit (TacticalOutfits/...) is a palette mod if it registers palettes, else a cards mod
+    // if it registers cards (Items/Gear/...), else a suit. A hero, faction or region is never guessed, and an unknown
+    // kind counts as a suit, as faction, region and cards did before they were kinds.
     int outfits = 0;
     for (int i = 0; i < m->nsrc; i++) {
         outfits += strstr(m->sources[i], "/TacticalOutfits/") != NULL;
         m->npal += strstr(m->sources[i], "HeroSkinPalette") != NULL;
+        m->ncards += strstr(m->sources[i], "/Items/Gear/") != NULL;
     }
     json *kind = json_get(j, "kind");
+    m->kind = K_SUIT;
     if (kind && kind->t == J_STR) {
-        m->is_palette = !_stricmp(kind->s, "palette");
-        m->is_hero = !_stricmp(kind->s, "hero");
-    } else m->is_palette = outfits == 0 && m->npal > 0;
-    if (m->is_palette && !m->npal) m->npal = 1;
+        for (int k = 0; k < K_COUNT; k++)
+            if (!_stricmp(kind->s, kind_word[k][0]) || !_stricmp(kind->s, kind_word[k][1])) m->kind = k;
+    } else if (!outfits && m->npal) m->kind = K_PALETTE;
+    else if (!outfits && m->ncards) m->kind = K_CARDS;
+    if (m->kind == K_PALETTE && !m->npal) m->npal = 1;
+    if (m->kind == K_CARDS && !m->ncards) m->ncards = 1;
     json_free(j);
 }
 
@@ -220,7 +236,7 @@ static void collect_paks(const wchar_t *paks, const wchar_t *rel, int depth, wch
     FindClose(f);
 }
 
-static const char *kind_name(const manifest *m) { return m->is_hero ? "hero" : m->is_palette ? "palette" : "suit"; }
+static const char *kind_name(const manifest *m) { return kind_word[m->kind][0]; }
 
 // Scan the Paks folder. full = 0: in DllMain (no AES/Oodle/threads); anything unusual sets unsure.
 static void scan(const wchar_t *paks, int full, scan_result *s)
@@ -379,7 +395,7 @@ int sync_quick_check(const wchar_t *paks)
         log_open();                                             // (file writes only: fine under the loader lock)
         log_msg("Paks folder: %ls", paks);
         for (int i = 0; i < s.nwarn; i++) log_msg("warning: %s", s.warn[i]);
-        log_msg("no hero, suit or palette paks found (searched its subfolders too) - nothing to do");
+        log_msg("no " ALL_KINDS " paks found (searched its subfolders too) - nothing to do");
         return 0;
     }
     char *want = expected_state(&s);
@@ -391,23 +407,21 @@ int sync_quick_check(const wchar_t *paks)
 
 // ---------------------------------------------------------------- full sync
 
-// "1 hero, 2 suits and 1 palette"
+// "1 hero, 2 suits, 1 palette, 4 cards, 1 faction and 1 region" (palette and card mods count what they add)
 static void summary(scan_result *s, char *out, size_t n)
 {
-    int cnt[3] = {0};
-    static const char *const word[3] = {"hero", "suit", "palette"};
+    int cnt[K_COUNT] = {0}, parts = 0, done = 0;
     for (int i = 0; i < s->n; i++) {
-        if (s->m[i].is_hero) cnt[0]++;
-        else if (s->m[i].is_palette) cnt[2] += s->m[i].npal;
-        else cnt[1]++;
+        const manifest *m = &s->m[i];
+        cnt[m->kind] += m->kind == K_PALETTE ? m->npal : m->kind == K_CARDS ? m->ncards : 1;
     }
-    int parts = (cnt[0] > 0) + (cnt[1] > 0) + (cnt[2] > 0), done = 0;
+    for (int k = 0; k < K_COUNT; k++) parts += cnt[k] > 0;
     *out = 0;
-    for (int k = 0; k < 3; k++) {
+    for (int k = 0; k < K_COUNT; k++) {
         if (!cnt[k]) continue;
         size_t l = strlen(out);
-        snprintf(out + l, n - l, "%s%d %s%s", done ? (done == parts - 1 ? " and " : ", ") : "", cnt[k], word[k],
-                 cnt[k] == 1 ? "" : (k == 0 ? "es" : "s"));
+        snprintf(out + l, n - l, "%s%d %s", done ? (done == parts - 1 ? " and " : ", ") : "", cnt[k],
+                 kind_word[k][cnt[k] == 1 ? 1 : 2]);
         done++;
     }
 }
@@ -430,7 +444,7 @@ static int cmp_bin(const void *a, const void *b) { return strcmp(((const bin_src
 static int build(const wchar_t *paks, scan_result *s, const char *state)
 {
     if (!oodle_load(1)) sr_fail("Oodle is not available");
-    char what[80];
+    char what[160];
     summary(s, what, sizeof what);
     log_msg("patching the game's registry for %s...", what);
     // the game's registries, from its own paks (later paks win, as in the game)
@@ -556,6 +570,10 @@ static void log_changes(const char *have, scan_result *s)
         else if (!hit->items[1]->s || strcmp(hit->items[1]->s, s->m[i].hash)) {
             log_msg("update needed: updated %s: %s", kind, s->m[i].title);
             any = 1;
+        } else if (hit->n >= 3 && hit->items[2]->s && strcmp(hit->items[2]->s, kind)) {
+            // the same manifest, counted as another kind (a registry built before these kinds existed)
+            log_msg("update needed: %s is now listed as %s (was %s)", s->m[i].title, kind, hit->items[2]->s);
+            any = 1;
         }
     }
     for (int k = 0; k < suits->n; k++) {
@@ -581,10 +599,10 @@ int sync_run(const wchar_t *paks, int interactive)
         for (int k = i + 1; k < s.n; k++)
             if (!strcmp(s.m[i].id, s.m[k].id))
                 sr_fail("mod id %s is in two paks: %s and %s - remove one", s.m[i].id, s.m[i].pak, s.m[k].pak);
-    char what[80];
+    char what[160];
     summary(&s, what, sizeof what);
     if (s.n) log_msg("found %s:", what);
-    else log_msg("no hero, suit or palette paks found");
+    else log_msg("no " ALL_KINDS " paks found");
     for (int i = 0; i < s.n; i++)
         log_msg("  %-8s %-30s %s", kind_name(&s.m[i]), s.m[i].title, s.m[i].pak);
     int exists;
@@ -600,7 +618,7 @@ int sync_run(const wchar_t *paks, int interactive)
             sr_fail("could not remove the registry pak (error %lu)", e);
         }
         free(p);
-        log_msg("removed the registry pak (no heroes, suits or palettes installed)");
+        log_msg("removed the registry pak (no heroes, suits, palettes, cards, factions or regions installed)");
         return 0;
     }
     if (have && !strcmp(have, want)) { log_msg("registry is up to date - nothing to do"); return 0; }
