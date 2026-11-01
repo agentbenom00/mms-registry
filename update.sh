@@ -9,7 +9,8 @@ game="$steam/steamapps/common/Marvel's Midnight Suns"
 paks="$game/MidnightSuns/Content/Paks"
 dll="$game/MidnightSuns/Binaries/Win64/version.dll"
 prefix="$steam/steamapps/compatdata/368260"
-proton="$(ls -d "$steam"/compatibilitytools.d/GE-Proton*/proton "$steam/steamapps/common/Proton - Experimental/proton" 2>/dev/null | head -1)"
+proton="$(ls -d "$steam"/compatibilitytools.d/GE-Proton*/proton "$steam/steamapps/common/Proton - Experimental/proton" 2>/dev/null | head -1 || true)"
+[ -n "$proton" ] || { echo "no Proton found under $steam"; exit 1; }
 data="$prefix/pfx/drive_c/users/steamuser/AppData/Local/MidnightSunsSuitRegistry"
 [ -f "$dll" ] || { echo "version.dll is not installed in $game"; exit 1; }
 if pgrep -f "^[^ ]*MidnightSuns-Win64-Shipping\.exe" >/dev/null; then
