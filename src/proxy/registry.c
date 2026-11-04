@@ -265,8 +265,10 @@ int reg_clone(reg *r, const char *object_path, rename_fn rn, void *ctx)
     for (int k = 0; k < 5; k++) clone_fname(r, &rr, &o, rn, ctx);
     uint64_t h = rd_u64(&rr);
     uint32_t num = (uint32_t)((h >> 32) & 0xffff), begin = (uint32_t)h;
-    if (!(h >> 63)) sr_fail("%s: only numberless-key tag maps are handled", object_path);
-    if ((uint64_t)begin + num > (uint64_t)r->nums[9]) sr_fail("%s: bad tag map", object_path);
+    // an empty map without the numberless flag (e.g. PJ_* projectiles) has no pairs to copy: its handle is kept
+    int keep_handle = num == 0 && !(h >> 63);
+    if (num && !(h >> 63)) sr_fail("%s: only numberless-key tag maps are handled", object_path);
+    if (!keep_handle && (uint64_t)begin + num > (uint64_t)r->nums[9]) sr_fail("%s: bad tag map", object_path);
     uint32_t new_begin = (uint32_t)r->nums[9] + r->n_pairs;
     for (uint32_t k = 0; k < num; k++) {
         const uint8_t *pp = r->b + r->nlpairs_at + 8ull * (begin + k);
@@ -290,7 +292,7 @@ int reg_clone(reg *r, const char *object_path, rename_fn rn, void *ctx)
         r->new_pairs[2 * r->n_pairs + 1] = vid;
         r->n_pairs++;
     }
-    buf_u64(&o, (1ull << 63) | ((uint64_t)num << 32) | new_begin);
+    buf_u64(&o, keep_handle ? h : (1ull << 63) | ((uint64_t)num << 32) | new_begin);
     int32_t nb = rd_i32(&rr);
     buf_u32(&o, (uint32_t)nb);
     for (int32_t k = 0; k < nb; k++) {
@@ -353,6 +355,24 @@ uint8_t *reg_build(reg *r, size_t *outn)
     buf_put(&o, r->new_assets.p, r->new_assets.n);
     COPY(r->assets_end, r->n);
 #undef COPY
+    // Self-check: read the result back and make sure it holds exactly what was added. On an error or a mismatch the
+    // sync stops here, before anything is written, and the installed registry pak stays as it was.
+    jmp_buf j, *outer = sr_jmp;
+    sr_jmp = &j;
+    if (setjmp(j)) {
+        char why[sizeof sr_error];
+        memcpy(why, sr_error, sizeof why);
+        sr_jmp = outer;
+        free(o.p);
+        sr_fail("the rebuilt registry failed its self-check (%s); nothing was changed", why);
+    }
+    reg *chk = reg_parse(o.p, o.n);
+    int ok = chk->nassets == r->nassets + (int32_t)r->n_new_assets && chk->nnames == r->nnames + r->n_new &&
+             chk->nums[0] == r->nums[0] + (int32_t)r->n_nl && chk->nums[9] == r->nums[9] + (int32_t)r->n_pairs;
+    chk->b = NULL;                                              // (the data is the result, not chk's)
+    reg_free(chk);
+    if (!ok) sr_fail("its counts differ from what was added");
+    sr_jmp = outer;
     *outn = o.n;
     return o.p;
 }

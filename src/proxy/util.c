@@ -193,7 +193,8 @@ void log_open(void)
     free(p);
     SYSTEMTIME t;
     GetLocalTime(&t);
-    log_msg("--- %04d-%02d-%02d %02d:%02d:%02d", t.wYear, t.wMonth, t.wDay, t.wHour, t.wMinute, t.wSecond);
+    log_msg("--- %04d-%02d-%02d %02d:%02d:%02d (MMS Registry " MMS_REGISTRY_VERSION ")", t.wYear, t.wMonth, t.wDay,
+            t.wHour, t.wMinute, t.wSecond);
 }
 
 void log_msg(const char *fmt, ...)

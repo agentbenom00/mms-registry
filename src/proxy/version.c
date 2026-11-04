@@ -1,5 +1,6 @@
 // MMS Registry: version.dll for Marvel's Midnight Suns. Keeps the shared registry pak (new hero, suit and palette
-// slots, cards, enemy factions and Mirror Table regions) in sync, every time the game starts.
+// slots, cards, enemy factions, Mirror Table regions, abilities and other templates) in sync, every time the game
+// starts.
 //
 // MidnightSuns-Win64-Shipping.exe imports version.dll and Windows looks next to the exe first, so this DLL loads
 // before the engine starts (long before it mounts the paks). Its 17 exports lead to the real implementations (see
@@ -15,7 +16,7 @@
 #include <tlhelp32.h>
 
 // found by `strings` / tools to tell this DLL apart from other mods' version.dll
-__attribute__((used)) const char suit_registry_marker[] = "MidnightSunsSuitRegistryProxy v5";
+__attribute__((used)) const char suit_registry_marker[] = "MidnightSunsSuitRegistryProxy v" MMS_REGISTRY_VERSION;
 
 HINSTANCE sr_self;
 

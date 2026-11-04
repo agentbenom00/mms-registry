@@ -10,6 +10,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#define MMS_REGISTRY_VERSION "2.0.0"                        // the release; also in the marker and the log
 #define REG_PAK L"zz_MidnightSuns_SuitRegistry_P.pak"
 #define STATE_PATH "CodaGame/SuitRegistry/state.json"
 #define DATA_DIR_NAME L"MidnightSunsSuitRegistry"
@@ -133,7 +134,7 @@ reg *reg_parse(uint8_t *data, size_t n);                    // keeps data (frees
 void reg_free(reg *r);
 typedef char *(*rename_fn)(const char *s, void *ctx);       // malloc'd new name, or NULL = unchanged
 int reg_clone(reg *r, const char *object_path, rename_fn rn, void *ctx);   // 0 ok, -1 not in the registry
-uint8_t *reg_build(reg *r, size_t *n);
+uint8_t *reg_build(reg *r, size_t *n);                    // reads its result back: sr_fail if it is off
 
 // ---- the sync
 int sync_quick_check(const wchar_t *paks);                  // in DllMain: 1 = something to do (or unsure)
