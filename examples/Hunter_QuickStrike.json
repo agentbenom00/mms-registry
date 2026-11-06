@@ -1,0 +1,6 @@
+{"format": 1, "id": "Hunter_QuickStrike", "title": "Quick Strike (Hunter gear + ability)",
+ "sources": [
+   "/Game/Coda/Templates/Items/Gear/Hunter/Power/Gear_HR_HNTR_QuickSlash.Gear_HR_HNTR_QuickSlash",
+   "/Game/Coda/Templates/Abilities/Heroes/Hunter/Ability_HR_HNTR_QuickSlash.Ability_HR_HNTR_QuickSlash"
+ ],
+ "rules": [["QuickSlash", "QuickStrike"]], "keep": []}

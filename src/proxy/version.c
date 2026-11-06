@@ -1,12 +1,11 @@
 // MMS Registry: version.dll for Marvel's Midnight Suns. Keeps the shared registry pak (new hero, suit and palette
-// slots, cards, enemy factions, Mirror Table regions, abilities and other templates) in sync, every time the game
-// starts.
+// slots, cards, abilities, characters, enemy factions and Mirror Table regions) in sync, every time the game starts.
 //
 // MidnightSuns-Win64-Shipping.exe imports version.dll and Windows looks next to the exe first, so this DLL loads
 // before the engine starts (long before it mounts the paks). Its 17 exports lead to the real implementations (see
 // version.def).
 //
-// On load (in the game only) it checks quickly whether the suit paks still match the registry pak (file reads only:
+// On load (in the game only) it checks quickly whether the suit paks still match the registry pak, and reads options.txt (file reads only:
 // DllMain runs under the loader lock, so no threads, downloads or windows here). If something changed it copies itself
 // to %LOCALAPPDATA%\MidnightSunsSuitRegistry\SuitRegistrySync.dll and runs
 //   rundll32.exe SuitRegistrySync.dll,SuitRegistrySync --from-game <Paks folder>
@@ -126,6 +125,7 @@ void CALLBACK SuitRegistrySyncW(HWND hwnd, HINSTANCE hinst, LPWSTR cmd, int show
     if (*start == L'"') start++;
 
     log_open();
+    options_load();
     HANDLE mutex = CreateMutexW(NULL, FALSE, L"Local\\MidnightSunsSuitRegistry");
     if (mutex) WaitForSingleObject(mutex, 10 * 60 * 1000);
     int rc = 0;
@@ -138,7 +138,7 @@ void CALLBACK SuitRegistrySyncW(HWND hwnd, HINSTANCE hinst, LPWSTR cmd, int show
             sr_fail("Midnight Suns is running: close it first (replacing paks under the running game crashes it)");
         rc = sync_run(start, from_game);
         if (rc == 5 && !elevated) {
-            log_msg("the game folder needs administrator rights - asking Windows for permission...");
+            log_msg(C_YE "The game folder needs administrator rights - asking Windows for permission..." C_WH);
             if (mutex) ReleaseMutex(mutex);
             static wchar_t args[MAX_PATH * 3];
             wchar_t self[MAX_PATH];
@@ -149,18 +149,19 @@ void CALLBACK SuitRegistrySyncW(HWND hwnd, HINSTANCE hinst, LPWSTR cmd, int show
             if (rc < 0) sr_fail("administrator rights are needed to update the registry pak in %ls", start);
         } else if (rc == 5) sr_fail("no permission to write to %ls", start);
     } else {
-        log_msg("error: %s", sr_error);
+        log_msg(C_RD "error: %s" C_WH, sr_error);           // "error:" starts the line: update.sh checks for it
         if (!quiet) {
+            console_show();                                     // the error (light red) is on the screen with everything logged before it
             wchar_t *w = utf8_to_w(sr_error);
             static wchar_t text[2048];
             swprintf(text, 2048, L"%ls\n\n%lsLog: %ls\\SuitRegistry.log", w,
-                     from_game ? L"The game will start, but the new or changed mods were not registered.\n\n" : L"",
-                     data_dir());
+                     from_game ? L"The game will start, but the new or changed mods were not registered.\n\n" : L"", data_dir());
             message(text, 1);
         }
         rc = 3;
     }
     if (mutex) { ReleaseMutex(mutex); CloseHandle(mutex); }
+    if (rc == 0 && console_is_open() && sr_opt.hold_seconds > 0) Sleep((DWORD)sr_opt.hold_seconds * 1000);   // time to read the report
     ExitProcess((UINT)rc);
 }
 
@@ -205,7 +206,11 @@ static void on_game_start(void)
     int need = 1;
     jmp_buf j;
     sr_jmp = &j;
-    if (!setjmp(j)) need = sync_quick_check(paks);
+    if (!setjmp(j)) {
+        options_load();
+        need = sync_quick_check(paks);
+        if (!need && sr_opt.show_always) need = 1;              // options.txt: the report window on every launch
+    }
     sr_jmp = NULL;
     if (need) start_sync(paks);
 }

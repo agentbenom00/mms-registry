@@ -123,7 +123,7 @@ int oodle_load(int allow_download)
     wchar_t *cached = wpath(data_dir(), names[0]);
     if (try_load(cached)) { free(cached); return 1; }
     if (!allow_download) { free(cached); return 0; }
-    log_msg("downloading the Oodle decompression library (first time only)...");
+    log_msg(C_YE "Downloading the Oodle decompression library (first time only)..." C_WH);
     size_t zn = 0, dn = 0;
     uint8_t *zip = http_get(OODLE_HOST, OODLE_URL, &zn);
     uint8_t *dll = zip_extract(zip, zn, OODLE_ZIP_ENTRY, &dn);

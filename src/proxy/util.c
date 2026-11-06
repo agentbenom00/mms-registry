@@ -53,6 +53,7 @@ void buf_reserve(buf *b, size_t extra)
 
 void buf_put(buf *b, const void *d, size_t n)
 {
+    if (!n) return;
     buf_reserve(b, n);
     memcpy(b->p + b->n, d, n);
     b->n += n;
@@ -197,36 +198,204 @@ void log_open(void)
             t.wHour, t.wMinute, t.wSecond);
 }
 
+static int console_vt;                                      // the console understands ANSI colour sequences
+static WORD console_attr0 = 7;                              // the console's own colour (restored after each coloured part)
+static buf pending;                                         // log lines written before the console was opened (replayed on open)
+
+static void con_color(char c)
+{
+    // O and Y are both orange (Y was yellow before); R is a LIGHT red
+    static const struct { unsigned char r, g, b; WORD attr; } T[] = {
+        {255, 140, 0,   FOREGROUND_RED | FOREGROUND_GREEN},                                         // O orange
+        {255, 140, 0,   FOREGROUND_RED | FOREGROUND_GREEN},                                         // Y orange (same as O)
+        {110, 200, 255, FOREGROUND_GREEN | FOREGROUND_BLUE | FOREGROUND_INTENSITY},                 // B light blue
+        {255, 120, 120, FOREGROUND_RED | FOREGROUND_INTENSITY},                                     // R light red
+        {235, 235, 235, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE | FOREGROUND_INTENSITY} // W white
+    };
+    int i = c == 'O' ? 0 : c == 'Y' ? 1 : c == 'B' ? 2 : c == 'R' ? 3 : 4;
+    if (console_vt) {
+        wchar_t seq[48];
+        int n = swprintf(seq, 48, L"\x1b[38;2;%d;%d;%dm", T[i].r, T[i].g, T[i].b);
+        DWORD w;
+        WriteConsoleW(console_out, seq, (DWORD)n, &w, NULL);
+    } else SetConsoleTextAttribute(console_out, T[i].attr);
+}
+
+static void con_write(const char *line)
+{
+    DWORD w;
+    const char *p = line;
+    while (*p) {
+        const char *q = strchr(p, 1);
+        size_t seg = q ? (size_t)(q - p) : strlen(p);
+        if (seg) {
+            char *t = xmalloc(seg + 1);
+            memcpy(t, p, seg);
+            t[seg] = 0;
+            wchar_t *ws = utf8_to_w(t);
+            WriteConsoleW(console_out, ws, (DWORD)wcslen(ws), &w, NULL);
+            free(ws);
+            free(t);
+        }
+        if (!q) break;
+        if (q[1]) { con_color(q[1]); p = q + 2; } else break;
+    }
+    if (console_vt) WriteConsoleW(console_out, L"\x1b[0m", 4, &w, NULL);
+    else SetConsoleTextAttribute(console_out, console_attr0);
+}
+
+static void log_line(const char *line, int to_console)
+{
+    size_t n = strlen(line);
+    char *plain = xmalloc(n + 1);
+    size_t k = 0;
+    for (size_t i = 0; i < n; i++) {
+        if (line[i] == 1 && i + 1 < n) { i++; continue; }          // drop the colour markers
+        plain[k++] = line[i];
+    }
+    plain[k] = 0;
+    DWORD w;
+    if (log_file != INVALID_HANDLE_VALUE) WriteFile(log_file, plain, (DWORD)k, &w, NULL);
+    free(plain);
+    if (!to_console) return;
+    if (console_out) con_write(line);
+    else if (pending.n < (1u << 17)) buf_put(&pending, line, n);   // replayed when the console opens
+}
+
+static void log_vformat(int to_console, const char *fmt, va_list ap)
+{
+    char line[4096];
+    int n = vsnprintf(line, sizeof line - 3, fmt, ap);
+    if (n < 0) return;
+    if (n > (int)sizeof line - 4) n = sizeof line - 4;
+    line[n++] = '\r'; line[n++] = '\n'; line[n] = 0;
+    log_line(line, to_console);
+}
+
 void log_msg(const char *fmt, ...)
 {
-    char line[2048];
     va_list ap;
     va_start(ap, fmt);
-    int n = vsnprintf(line, sizeof line - 2, fmt, ap);
+    log_vformat(1, fmt, ap);
     va_end(ap);
-    if (n < 0) return;
-    if (n > (int)sizeof line - 3) n = sizeof line - 3;
-    line[n++] = '\r'; line[n++] = '\n'; line[n] = 0;
-    DWORD w;
-    if (log_file != INVALID_HANDLE_VALUE) WriteFile(log_file, line, n, &w, NULL);
-    if (console_out) {
-        wchar_t *ws = utf8_to_w(line);
-        WriteConsoleW(console_out, ws, (DWORD)wcslen(ws), &w, NULL);
-        free(ws);
-    }
 }
+
+void log_file_only(const char *fmt, ...)
+{
+    va_list ap;
+    va_start(ap, fmt);
+    log_vformat(0, fmt, ap);
+    va_end(ap);
+}
+
+// text size: the console's own font, made font_percent % bigger (Consolas; ignored where the console does not allow it)
+typedef struct { ULONG cbSize; DWORD nFont; COORD dwFontSize; UINT FontFamily, FontWeight; WCHAR FaceName[32]; } font_info;
+
+static void console_bigger_text(void)
+{
+    if (sr_opt.font_percent == 100 || sr_opt.font_percent < 50 || sr_opt.font_percent > 400) return;
+    HMODULE k = GetModuleHandleW(L"kernel32.dll");
+    typedef BOOL (WINAPI *get_t)(HANDLE, BOOL, font_info *);
+    typedef BOOL (WINAPI *set_t)(HANDLE, BOOL, font_info *);
+    get_t get = k ? (get_t)GetProcAddress(k, "GetCurrentConsoleFontEx") : NULL;
+    set_t set = k ? (set_t)GetProcAddress(k, "SetCurrentConsoleFontEx") : NULL;
+    if (!get || !set) return;
+    font_info fi = {sizeof fi};
+    if (!get(console_out, FALSE, &fi)) return;
+    int h = fi.dwFontSize.Y < 16 ? 16 : fi.dwFontSize.Y;         // (the old raster font is 12 high: start from Consolas 16)
+    fi.dwFontSize.X = 0;
+    fi.dwFontSize.Y = (SHORT)((h * sr_opt.font_percent + 50) / 100);
+    fi.FontFamily = 54;                                          // FF_MODERN | TMPF_TRUETYPE | TMPF_VECTOR | fixed pitch
+    fi.FontWeight = 400;
+    lstrcpyW(fi.FaceName, L"Consolas");
+    set(console_out, FALSE, &fi);
+}
+
+int console_is_open(void) { return console_out != NULL; }
 
 void console_show(void)
 {
     if (console_out) return;
     if (!AllocConsole()) AttachConsole(ATTACH_PARENT_PROCESS);
     SetConsoleTitleW(L"MMS Registry");
-    console_out = CreateFileW(L"CONOUT$", GENERIC_WRITE, FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, NULL);
+    console_out = CreateFileW(L"CONOUT$", GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, NULL);
     if (console_out == INVALID_HANDLE_VALUE) console_out = NULL;
-    if (console_out) {
-        DWORD w;
-        WriteConsoleW(console_out, L"Updating the MMS Registry, the game starts right after...\r\n", 59, &w, NULL);
+    if (!console_out) return;
+    CONSOLE_SCREEN_BUFFER_INFO ci;
+    if (GetConsoleScreenBufferInfo(console_out, &ci)) console_attr0 = ci.wAttributes;
+    DWORD mode;
+    if (GetConsoleMode(console_out, &mode) && SetConsoleMode(console_out, mode | 0x0004 /* ENABLE_VIRTUAL_TERMINAL_PROCESSING */))
+        console_vt = 1;
+    console_bigger_text();
+    {   // a long scroll-back (the full list can be long) and a window wide enough for the lines
+        COORD sz = {150, 9000};
+        SMALL_RECT win = {0, 0, 129, 39};
+        SetConsoleScreenBufferSize(console_out, sz);
+        SetConsoleWindowInfo(console_out, TRUE, &win);
     }
+    con_write(C_BL "\r\n  ====  MMS REGISTRY  ====\r\n" C_WH
+              "  Keeps the game's registry in sync with your mods: new heroes, suits, cards, abilities and blueprints\r\n"
+              "  are cloned from the game's own entries and renamed. The game starts right after this window closes.\r\n"
+              "  (options: " C_OR "options.txt" C_WH " in the MidnightSunsSuitRegistry folder - report on every launch, text size, hold time)\r\n\r\n");
+    if (pending.n) {
+        buf_u8(&pending, 0);
+        con_write((const char *)pending.p);
+    }
+    buf_free(&pending);
+}
+
+// ---- options file
+
+sr_options sr_opt = {1, 4, 125, 1};
+
+static const char OPTIONS_DEFAULT[] =
+    "# MMS Registry options (this file is read at every game start; delete it to get the defaults back)\r\n"
+    "# show_always: 1 = the report window opens on EVERY launch and lists everything the mods clone, with the pak each\r\n"
+    "#              entry comes from; 0 = only when the registry has to be rebuilt\r\n"
+    "show_always=1\r\n"
+    "# hold_seconds: how long the window stays open after the report (the game starts after it closes)\r\n"
+    "hold_seconds=4\r\n"
+    "# font_percent: text size of the window in percent of the console's own size (125 = 25% bigger, 100 = unchanged)\r\n"
+    "font_percent=125\r\n"
+    "# full_list: 1 = every cloned entry is listed on the screen, 0 = only the totals per pak (the log file always has the full list)\r\n"
+    "full_list=1\r\n";
+
+void options_load(void)
+{
+    wchar_t *p = wpath(data_dir(), L"options.txt");
+    size_t n = 0;
+    uint8_t *d = file_read_all(p, &n);
+    if (!d) {
+        HANDLE h = CreateFileW(p, GENERIC_WRITE, 0, NULL, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, NULL);
+        if (h != INVALID_HANDLE_VALUE) {
+            DWORD w;
+            WriteFile(h, OPTIONS_DEFAULT, (DWORD)(sizeof OPTIONS_DEFAULT - 1), &w, NULL);
+            CloseHandle(h);
+        }
+        free(p);
+        return;
+    }
+    free(p);
+    for (char *line = (char *)d; *line;) {
+        char *e = line + strcspn(line, "\r\n");
+        char save = *e;
+        *e = 0;
+        while (*line == ' ' || *line == '\t') line++;
+        if (*line && *line != '#') {
+            char *eq = strchr(line, '=');
+            if (eq) {
+                *eq = 0;
+                int v = atoi(eq + 1);
+                if (!_stricmp(line, "show_always")) sr_opt.show_always = v != 0;
+                else if (!_stricmp(line, "hold_seconds")) sr_opt.hold_seconds = v < 0 ? 0 : v > 60 ? 60 : v;
+                else if (!_stricmp(line, "font_percent")) sr_opt.font_percent = v;
+                else if (!_stricmp(line, "full_list")) sr_opt.full_list = v != 0;
+            }
+        }
+        if (!save) break;
+        line = e + 1;
+    }
+    free(d);
 }
 
 // ---- FNV-1a

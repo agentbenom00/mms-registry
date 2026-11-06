@@ -28,6 +28,8 @@ struct reg {
     uint32_t *name_off;                                         // byte offset of each name's characters
     size_t store_start, nums_at, nlnames_at, nlpairs_at, nlpairs_end, store_end;
     int32_t nums[11];
+    size_t n1_end, n2_end, n3_end;                              // ends of the Names / NumberlessExportPaths / ExportPaths arrays
+    uint32_t *n1_off, *n3_off;                                  // byte offset of each Names / ExportPaths entry
     size_t assets_at, assets_end;
     int32_t nassets;
     nslot *names; uint64_t nmask;
@@ -36,6 +38,8 @@ struct reg {
     char **new_names; uint32_t n_new, cap_new;
     uint32_t *new_nl; uint32_t n_nl, cap_nl;
     uint32_t *new_pairs; uint32_t n_pairs, cap_pairs;          // key, value
+    buf new_n1, new_n2, new_n3;                                 // appended tag values: names, numberless export paths, export paths
+    uint32_t c_n1, c_n2, c_n3;
     buf new_assets;
     uint32_t n_new_assets;
 };
@@ -139,9 +143,14 @@ reg *reg_parse(uint8_t *data, size_t n)
     }
     uint32_t a, b2;
     r->nlnames_at = rr.at; rd_skip(&rr, 4ull * r->nums[0]);
-    for (int i = 0; i < r->nums[1]; i++) fname(&rr, &a, &b2);
+    r->n1_off = xmalloc(4ull * (r->nums[1] + 1));
+    r->n3_off = xmalloc(4ull * (r->nums[3] + 1));
+    for (int i = 0; i < r->nums[1]; i++) { r->n1_off[i] = (uint32_t)rr.at; fname(&rr, &a, &b2); }
+    r->n1_end = rr.at;
     rd_skip(&rr, 12ull * r->nums[2]);
-    for (int i = 0; i < r->nums[3]; i++) { fname(&rr, &a, &b2); fname(&rr, &a, &b2); fname(&rr, &a, &b2); }
+    r->n2_end = rr.at;
+    for (int i = 0; i < r->nums[3]; i++) { r->n3_off[i] = (uint32_t)rr.at; fname(&rr, &a, &b2); fname(&rr, &a, &b2); fname(&rr, &a, &b2); }
+    r->n3_end = rr.at;
     if (!text_first)
         for (int i = 0; i < r->nums[4]; i++) rd_skip_fstring(&rr);
     rd_skip(&rr, 4ull * r->nums[5] + 4ull * r->nums[6] + (uint64_t)r->nums[7] + 2ull * r->nums[8]);
@@ -197,6 +206,11 @@ void reg_free(reg *r)
     free(r->new_names);
     free(r->new_nl);
     free(r->new_pairs);
+    free(r->n1_off);
+    free(r->n3_off);
+    buf_free(&r->new_n1);
+    buf_free(&r->new_n2);
+    buf_free(&r->new_n3);
     buf_free(&r->new_assets);
     free(r);
 }
@@ -265,10 +279,10 @@ int reg_clone(reg *r, const char *object_path, rename_fn rn, void *ctx)
     for (int k = 0; k < 5; k++) clone_fname(r, &rr, &o, rn, ctx);
     uint64_t h = rd_u64(&rr);
     uint32_t num = (uint32_t)((h >> 32) & 0xffff), begin = (uint32_t)h;
-    // an empty map without the numberless flag (e.g. PJ_* projectiles) has no pairs to copy: its handle is kept
-    int keep_handle = num == 0 && !(h >> 63);
-    if (num && !(h >> 63)) sr_fail("%s: only numberless-key tag maps are handled", object_path);
-    if (!keep_handle && (uint64_t)begin + num > (uint64_t)r->nums[9]) sr_fail("%s: bad tag map", object_path);
+    // an empty tag map (e.g. ProjectileContent, PJ_* assets) has handle 0: nothing to copy, the handle stays as it is
+    int empty = num == 0 && !(h >> 63);
+    if (!empty && !(h >> 63)) sr_fail("%s: only numberless-key tag maps are handled", object_path);
+    if (!empty && (uint64_t)begin + num > (uint64_t)r->nums[9]) sr_fail("%s: bad tag map", object_path);
     uint32_t new_begin = (uint32_t)r->nums[9] + r->n_pairs;
     for (uint32_t k = 0; k < num; k++) {
         const uint8_t *pp = r->b + r->nlpairs_at + 8ull * (begin + k);
@@ -284,6 +298,27 @@ int reg_clone(reg *r, const char *object_path, rename_fn rn, void *ctx)
             }
             free(s);
             free(nw);
+        } else if (t == 3) {                                    // name value (FName, may carry a number)
+            if (idx >= (uint32_t)r->nums[1]) sr_fail("%s: bad name value", object_path);
+            rd er = {r->b, r->n1_end, r->n1_off[idx]};
+            vid = (((uint32_t)r->nums[1] + r->c_n1++) << 3) | 3;
+            clone_fname(r, &er, &r->new_n1, rn, ctx);
+        } else if (t == 4) {                                    // numberless export path: class, package, object
+            if (idx >= (uint32_t)r->nums[2]) sr_fail("%s: bad export path value", object_path);
+            const uint8_t *ep = r->b + r->n1_end + 12ull * idx;
+            for (int f = 0; f < 3; f++) {
+                char *s = name_str(r, rd32(ep + 4 * f));
+                char *nw = s ? rn(s, ctx) : NULL;
+                buf_u32(&r->new_n2, nw ? name_index(r, nw) : rd32(ep + 4 * f));
+                free(s);
+                free(nw);
+            }
+            vid = (((uint32_t)r->nums[2] + r->c_n2++) << 3) | 4;
+        } else if (t == 5) {                                    // export path with numbered names
+            if (idx >= (uint32_t)r->nums[3]) sr_fail("%s: bad export path value", object_path);
+            rd er = {r->b, r->n3_end, r->n3_off[idx]};
+            for (int f = 0; f < 3; f++) clone_fname(r, &er, &r->new_n3, rn, ctx);
+            vid = (((uint32_t)r->nums[3] + r->c_n3++) << 3) | 5;
         } else if (t != 0 && t != 1 && t != 6) {                // strings/texts are reused as they are
             sr_fail("%s: tag value type %u is not handled", object_path, t);
         }
@@ -292,7 +327,7 @@ int reg_clone(reg *r, const char *object_path, rename_fn rn, void *ctx)
         r->new_pairs[2 * r->n_pairs + 1] = vid;
         r->n_pairs++;
     }
-    buf_u64(&o, keep_handle ? h : (1ull << 63) | ((uint64_t)num << 32) | new_begin);
+    buf_u64(&o, empty ? h : (1ull << 63) | ((uint64_t)num << 32) | new_begin);
     int32_t nb = rd_i32(&rr);
     buf_u32(&o, (uint32_t)nb);
     for (int32_t k = 0; k < nb; k++) {
@@ -319,7 +354,7 @@ uint8_t *reg_build(reg *r, size_t *outn)
     size_t new_str = 0;
     for (uint32_t i = 0; i < r->n_new; i++) new_str += strlen(r->new_names[i]);
     buf o = {0};
-    buf_reserve(&o, r->n + r->n_new * 10ull + new_str + r->n_nl * 4ull + r->n_pairs * 8ull + r->new_assets.n + 64);
+    buf_reserve(&o, r->n + r->n_new * 10ull + new_str + r->n_nl * 4ull + r->n_pairs * 8ull + r->new_assets.n + r->new_n1.n + r->new_n2.n + r->new_n3.n + 64);
 #define COPY(a, z) buf_put(&o, b + (a), (z) - (a))
     COPY(0, r->nb_start);
     uint32_t nbytes = rd32(b + r->nb_start + 4);
@@ -342,11 +377,18 @@ uint8_t *reg_build(reg *r, size_t *outn)
     // tag store
     COPY(r->store_start, r->nums_at);
     for (int i = 0; i < 11; i++)
-        buf_u32(&o, (uint32_t)(r->nums[i] + (i == 0 ? (int32_t)r->n_nl : i == 9 ? (int32_t)r->n_pairs : 0)));
+        buf_u32(&o, (uint32_t)(r->nums[i] + (i == 0 ? (int32_t)r->n_nl : i == 1 ? (int32_t)r->c_n1 : i == 2 ? (int32_t)r->c_n2 :
+                                              i == 3 ? (int32_t)r->c_n3 : i == 9 ? (int32_t)r->n_pairs : 0)));
     size_t nl_end = r->nlnames_at + 4ull * r->nums[0];
     COPY(r->nums_at + 44, nl_end);
     buf_put(&o, r->new_nl, 4ull * r->n_nl);
-    COPY(nl_end, r->nlpairs_end);
+    COPY(nl_end, r->n1_end);
+    buf_put(&o, r->new_n1.p, r->new_n1.n);
+    COPY(r->n1_end, r->n2_end);
+    buf_put(&o, r->new_n2.p, r->new_n2.n);
+    COPY(r->n2_end, r->n3_end);
+    buf_put(&o, r->new_n3.p, r->new_n3.n);
+    COPY(r->n3_end, r->nlpairs_end);
     buf_put(&o, r->new_pairs, 8ull * r->n_pairs);
     COPY(r->nlpairs_end, r->store_end);
     // assets
@@ -355,24 +397,18 @@ uint8_t *reg_build(reg *r, size_t *outn)
     buf_put(&o, r->new_assets.p, r->new_assets.n);
     COPY(r->assets_end, r->n);
 #undef COPY
-    // Self-check: read the result back and make sure it holds exactly what was added. On an error or a mismatch the
-    // sync stops here, before anything is written, and the installed registry pak stays as it was.
-    jmp_buf j, *outer = sr_jmp;
-    sr_jmp = &j;
-    if (setjmp(j)) {
-        char why[sizeof sr_error];
-        memcpy(why, sr_error, sizeof why);
-        sr_jmp = outer;
-        free(o.p);
-        sr_fail("the rebuilt registry failed its self-check (%s); nothing was changed", why);
+    // self-check: parse what was just built and compare the counts. Any structural error or mismatch aborts the sync
+    // before anything is written, so the registry stays exactly as it was.
+    {
+        reg *chk = reg_parse(o.p, o.n);
+        int bad = chk->nassets != r->nassets + (int32_t)r->n_new_assets || chk->nnames != r->nnames + r->n_new ||
+                  chk->nums[0] != r->nums[0] + (int32_t)r->n_nl || chk->nums[9] != r->nums[9] + (int32_t)r->n_pairs ||
+                  chk->nums[1] != r->nums[1] + (int32_t)r->c_n1 || chk->nums[2] != r->nums[2] + (int32_t)r->c_n2 ||
+                  chk->nums[3] != r->nums[3] + (int32_t)r->c_n3;
+        chk->b = NULL;                                          // the built bytes stay ours
+        reg_free(chk);
+        if (bad) { free(o.p); sr_fail("the rebuilt registry failed its self-check; nothing was changed"); }
     }
-    reg *chk = reg_parse(o.p, o.n);
-    int ok = chk->nassets == r->nassets + (int32_t)r->n_new_assets && chk->nnames == r->nnames + r->n_new &&
-             chk->nums[0] == r->nums[0] + (int32_t)r->n_nl && chk->nums[9] == r->nums[9] + (int32_t)r->n_pairs;
-    chk->b = NULL;                                              // (the data is the result, not chk's)
-    reg_free(chk);
-    if (!ok) sr_fail("its counts differ from what was added");
-    sr_jmp = outer;
     *outn = o.n;
     return o.p;
 }

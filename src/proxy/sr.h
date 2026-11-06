@@ -10,8 +10,9 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define MMS_REGISTRY_VERSION "2.0.0"                        // the release; also in the marker and the log
+#define MMS_REGISTRY_VERSION "2.1.0"                        // the release; also in the marker and the log
 #define REG_PAK L"zz_MidnightSuns_SuitRegistry_P.pak"
+#define REG_PAK_OLD L"zzzzzzzzzz_DragonCore_EngineRegistry_P.pak"   // the previous name: removed when found
 #define STATE_PATH "CodaGame/SuitRegistry/state.json"
 #define DATA_DIR_NAME L"MidnightSunsSuitRegistry"
 
@@ -60,8 +61,28 @@ const wchar_t *data_dir(void);                              // %LOCALAPPDATA%\Mi
 
 // ---- log (file in data_dir + the console when one is open)
 void log_open(void);
-void log_msg(const char *fmt, ...);
+// Console colours: a message may contain colour markers (they are removed from the log file, the console shows them).
+// C_OR orange = everything the mods add (heroes, suits, gear, abilities, characters, blueprints, palettes, effects, pak names...);
+// C_YE is the same orange (it used to be yellow); C_BL light blue = the MMS Registry banner; C_RD light red = errors; C_WH = normal text.
+#define C_OR "\x01O"
+#define C_YE "\x01Y"
+#define C_BL "\x01" "B"
+#define C_RD "\x01R"
+#define C_WH "\x01W"
+void log_msg(const char *fmt, ...);                         // log file + console (the console shows what was logged before it opened)
+void log_file_only(const char *fmt, ...);                   // log file only (details that would flood the console)
 void console_show(void);
+int console_is_open(void);
+
+// ---- options (%LOCALAPPDATA%\MidnightSunsSuitRegistry\options.txt, written with its defaults on the first run)
+typedef struct {
+    int show_always;                                            // 1: open the report window on every launch (0: only when the registry is rebuilt)
+    int hold_seconds;                                           // how long the window stays after the report (the game waits for it)
+    int font_percent;                                           // console text size in percent of the console's own (125 = 25% bigger)
+    int full_list;                                              // 1: list every cloned entry on the console (0: only the totals; the log file always has everything)
+} sr_options;
+extern sr_options sr_opt;
+void options_load(void);
 
 // ---- hashing / crypto
 uint64_t city_hash64(const uint8_t *s, size_t len);
@@ -134,7 +155,7 @@ reg *reg_parse(uint8_t *data, size_t n);                    // keeps data (frees
 void reg_free(reg *r);
 typedef char *(*rename_fn)(const char *s, void *ctx);       // malloc'd new name, or NULL = unchanged
 int reg_clone(reg *r, const char *object_path, rename_fn rn, void *ctx);   // 0 ok, -1 not in the registry
-uint8_t *reg_build(reg *r, size_t *n);                    // reads its result back: sr_fail if it is off
+uint8_t *reg_build(reg *r, size_t *n);
 
 // ---- the sync
 int sync_quick_check(const wchar_t *paks);                  // in DllMain: 1 = something to do (or unsure)
