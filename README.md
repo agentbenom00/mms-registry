@@ -144,6 +144,9 @@ none):
   upgrade) when no selected choice has that tag. The panel checks when a row changes, when it opens and at Start.
   Register the tag in your tags ini, and remove it with your other choices (`FactTagsToRemove`), since it's also a
   fact on the room's mission.
+- **Hiding Enemy Type (2.4.0):** `Mission.ThreatRoomOption.Hide.EnemyType` works the same for the Enemy Type row
+  (shown again with the Tier II upgrade). While it's hidden, the panel picks a random enemy type each time it checks,
+  including at Start, so the fight's starting faction is random.
 - The room's mission keeps its facts from one start to the next, so each choice's mission mod must remove the facts
   of the other choices in its row (`FactTagsToRemove`). Make your own tags, and register them in a
   `Config/Tags/*.ini`.

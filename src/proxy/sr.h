@@ -10,7 +10,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define MMS_REGISTRY_VERSION "2.3.0"                        // the release; also in the marker and the log
+#define MMS_REGISTRY_VERSION "2.4.0"                        // the release; also in the marker and the log
 #define REG_PAK L"zz_MidnightSuns_SuitRegistry_P.pak"
 #define REG_PAK_OLD L"zzzzzzzzzz_DragonCore_EngineRegistry_P.pak"   // the previous name: removed when found
 #define STATE_PATH "CodaGame/SuitRegistry/state.json"

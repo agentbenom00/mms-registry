@@ -13,8 +13,9 @@ MissionMod_ModifyFacts, and registering it (MMS Registry manifest). The panel li
 - under Mission.ThreatRoomOption: a choice in a row of its own above Number of Heroes, one row per Description
   (the row label); the choice that adds no fact comes first and is selected whenever the panel opens.
 A selected choice whose mission mod's FactTags has Mission.ThreatRoomOption.Hide.Villain hides the Villain row and
-resets it to None (shown again, with the Tier III upgrade, when no selected choice has it): checked when a row
-changes, when the panel opens and at Start.
+resets it to None (shown again, with the Tier III upgrade, when no selected choice has it); with
+Mission.ThreatRoomOption.Hide.EnemyType it hides Enemy Type and picks a random one each time (shown again with Tier
+II). Checked when a row changes, when the panel opens and at Start.
 The game's own 13 options are skipped by identity (the panel removes locked ones from its lists before this runs).
 With nothing registered the panel behaves exactly like the game's.
 """
@@ -33,6 +34,7 @@ PANEL = "/DLC_Storm/UI/Screens/Strategy/MissionSelect/WBP_MissionModsPanel_THREA
 FN = "MMS_AddRegisteredOptions"
 FN_CHANGED = "MMS_OnExtraRowChanged"
 TAG_HIDE_VILLAIN = "Mission.ThreatRoomOption.Hide.Villain"
+TAG_HIDE_ENEMY = "Mission.ThreatRoomOption.Hide.EnemyType"
 TAG_ENEMY, TAG_VILLAIN, TAG_ROW = "Mission.AllowedEnemies", "Mission.RandomVillain", "Mission.ThreatRoomOption"
 VANILLA_ENTRIES = ["Entry_Hydra", "Entry_Soulless", "Entry_Lilin", "Entry_Vampyres", "Entry_None", "Entry_FallenVenom",
                    "Entry_Crossbones", "Entry_FallenScarletWitch", "Entry_FallenSabretooth", "Entry_DreadMaiden",
@@ -114,7 +116,8 @@ def build(out_root):
     for f in ("Array_Find", "Array_Contains", "Array_Insert", "Array_Add", "Array_Get", "Array_Length"):
         I[f] = p.imp(f"/Script/Engine:KismetArrayLibrary.{f}", "/Script/CoreUObject", "Function")
     I["arraylib"] = imp("/Script/Engine:Default__KismetArrayLibrary")
-    for f in ("Less_IntInt", "Add_IntInt", "EqualEqual_IntInt", "NotEqual_IntInt", "Greater_IntInt", "GreaterEqual_IntInt"):
+    for f in ("Less_IntInt", "Add_IntInt", "EqualEqual_IntInt", "NotEqual_IntInt", "Greater_IntInt", "GreaterEqual_IntInt",
+              "Subtract_IntInt", "RandomIntegerInRange"):
         I[f] = p.imp(f"/Script/Engine:KismetMathLibrary.{f}", "/Script/CoreUObject", "Function")
     I["Conv_TextToString"] = imp("/Script/Engine:KismetTextLibrary.Conv_TextToString")
     p.imp("/Script/UMG:PanelWidget", "/Script/CoreUObject", "Class")
@@ -234,7 +237,7 @@ def build(out_root):
         ("Row", "obj", {"cls": I["item"]}), ("Created", "obj", {"cls": I["userwidget"]}),
         ("PC", "obj", {"cls": I["pc"]}), ("Slot", "obj", {"cls": I["panelslot"]}),
         ("Vanilla", "objarray", {}), ("Nav", "delegate", {}), ("hide", "bool", {}), ("idx", "int", {}),
-        ("Changed", "changed", {}),
+        ("Changed", "changed", {}), ("hideE", "bool", {}),
     ]:
         V[name] = local("MMS_" + name, kind, **kw)
     gi_src = next(x for x in popfn["LoadedProperties"] if x["Name"] == "CallFunc_GetInstance_ReturnValue")
@@ -461,6 +464,7 @@ def build(out_root):
     # Which 4 (and after 3): hide Villain while a selected choice says so, reset it to None; else show it (Tier III)
     a.label("HIDE")
     a.emit(let_b(V["hide"], kis.false()))
+    a.emit(let_b(V["hideE"], kis.false()))
     a.emit(let_l(V["k"], kis.int_const(0)))
     a.label("HLOOP")
     loop_head(a, V["k"], sv("MMS_Rows"), "HAPPLY")
@@ -481,8 +485,12 @@ def build(out_root):
     a.emit(let_b(V["b"], tobool(lv(V["MF"]))))
     a.if_not(lv(V["b"]), "HLOOP")
     a.emit(let_b(V["b"], math("HasTag", get(lv(V["MF"]), "FactTags", I["mmf"]), tagconst(TAG_HIDE_VILLAIN), kis.true())))
-    a.if_not(lv(V["b"]), "HLOOP")
+    a.if_not(lv(V["b"]), "CHKE")
     a.emit(let_b(V["hide"], kis.true()))
+    a.label("CHKE")
+    a.emit(let_b(V["b"], math("HasTag", get(lv(V["MF"]), "FactTags", I["mmf"]), tagconst(TAG_HIDE_ENEMY), kis.true())))
+    a.if_not(lv(V["b"]), "HLOOP")
+    a.emit(let_b(V["hideE"], kis.true()))
     a.goto("HLOOP")
     a.label("HAPPLY")
     vis = next(st for st in ubst if pr.e(st) == "self.SquadSize->SetVisibility(4)")
@@ -490,16 +498,35 @@ def build(out_root):
     hidev = kis.replace_field(copy.deepcopy(vis), "SquadSize", "Villain")
     hidev["ContextExpression"]["Parameters"][0]["Value"] = 1                    # ESlateVisibility::Collapsed
     a.emit(hidev)
-    a.emit(kis.replace_field(copy.deepcopy(next(st for st in ubst if pr.e(st) == "self.Villain->SetSelection(0)")), "x", "x"))
-    a.goto("RET")
+    sel0 = next(st for st in ubst if pr.e(st) == "self.Villain->SetSelection(0)")
+    a.emit(copy.deepcopy(sel0))
+    a.goto("EAPPLY")
     a.label("SHOW")
     t2 = copy.deepcopy(next(st for st in ubst if "EvaluateStrategyConditionSet(self, self.ConditionsT2" in pr.e(st)))
     t2["VariableExpression" if "VariableExpression" in t2 else "Variable"] = lv(V["b"])
     if "Value" in t2 and isinstance(t2["Value"], dict) and "New" in t2["Value"]:
         t2["Value"] = kis.fp(V["b"], F)
     a.emit(t2)
-    a.if_not(lv(V["b"]), "RET")
+    a.if_not(lv(V["b"]), "EAPPLY")
     a.emit(kis.replace_field(copy.deepcopy(vis), "SquadSize", "Villain"))
+    # Enemy Type: hidden -> a random one each time (the start's faction); else shown again with Tier II, as the game does
+    a.label("EAPPLY")
+    a.if_not(lv(V["hideE"]), "ESHOW")
+    hidee = kis.replace_field(copy.deepcopy(vis), "SquadSize", "EnemyType")
+    hidee["ContextExpression"]["Parameters"][0]["Value"] = 1
+    a.emit(hidee)
+    a.emit(let_l(V["n"], arr("Array_Length", [sv("EnemyTypeLabel")], V["n"])))
+    a.emit(let_l(V["n"], math("Subtract_IntInt", lv(V["n"]), kis.int_const(1))))
+    a.emit(let_l(V["r"], math("RandomIntegerInRange", kis.int_const(0), lv(V["n"]))))
+    sele = kis.replace_field(copy.deepcopy(sel0), "Villain", "EnemyType")
+    sele["ContextExpression"]["Parameters"][0] = lv(V["r"])
+    a.emit(sele)
+    a.goto("RET")
+    a.label("ESHOW")
+    t1 = kis.replace_field(copy.deepcopy(t2), "ConditionsT2", "ConditionsT1")
+    a.emit(t1)
+    a.if_not(lv(V["b"]), "RET")
+    a.emit(kis.replace_field(copy.deepcopy(vis), "SquadSize", "EnemyType"))
     a.goto("RET")
     a.finish(d, FN)
 
@@ -574,7 +601,7 @@ def build(out_root):
     i_start = ue.kismet_offsets(d)[UBN].index(start_fn["ScriptBytecode"][0]["Parameters"][0]["Value"])
     kis.insert(d, UBN, [(i_enemy, [call(0)]), (i_vil, [call(1)]), (i_t1, [call(2)]), (i_vis + 1, [show]),
                         (i_start, [call(4)]), (i_sel, [call(3)])], ubergraph=True)
-    for n in (FN, FN_CHANGED, "MMS_ExtraRows", TAG_ENEMY, TAG_VILLAIN, TAG_ROW, TAG_HIDE_VILLAIN, "SetSelection"):
+    for n in (FN, FN_CHANGED, "MMS_ExtraRows", TAG_ENEMY, TAG_VILLAIN, TAG_ROW, TAG_HIDE_VILLAIN, TAG_HIDE_ENEMY, "SetSelection"):
         p.name(n)
     msg = ue.fix_offsets(d)
     for e in d["Exports"]:

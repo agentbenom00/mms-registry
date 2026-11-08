@@ -28,7 +28,9 @@ It needs the game's paks (Steam install, path in `lib/ue.py`), repak 0.2.3 and t
     `AllMissionMods`, so they get the mission ID and are applied on start, and they get the left-navigation rule.
   - `Which` 3 selects every row's first choice, then runs `Which` 4.
   - `Which` 4 hides the Villain row (and resets it to None) while a selected choice's mission mod has
-    `Mission.ThreatRoomOption.Hide.Villain`, and shows it again otherwise, as the game does with Tier III.
+    `Mission.ThreatRoomOption.Hide.Villain`, and shows it again otherwise, as the game does with Tier III. With
+    `Mission.ThreatRoomOption.Hide.EnemyType` it hides Enemy Type and selects a random one (`RandomIntegerInRange`);
+    otherwise it shows it again with Tier II.
 - **Function `MMS_OnExtraRowChanged(TargetControl, Value)`:** bound to each extra row's `OnChangedCallback` (after
   the row's own handler, which updates `CurrentIndex`); it runs `Which` 4.
 - **Calls in the event graph:**
