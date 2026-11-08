@@ -12,6 +12,9 @@ MissionMod_ModifyFacts, and registering it (MMS Registry manifest). The panel li
 - under Mission.RandomVillain: an extra choice in Villain;
 - under Mission.ThreatRoomOption: a choice in a row of its own above Number of Heroes, one row per Description
   (the row label); the choice that adds no fact comes first and is selected whenever the panel opens.
+A selected choice whose mission mod's FactTags has Mission.ThreatRoomOption.Hide.Villain hides the Villain row and
+resets it to None (shown again, with the Tier III upgrade, when no selected choice has it): checked when a row
+changes, when the panel opens and at Start.
 The game's own 13 options are skipped by identity (the panel removes locked ones from its lists before this runs).
 With nothing registered the panel behaves exactly like the game's.
 """
@@ -28,6 +31,8 @@ from pkg import Pkg  # noqa: E402
 
 PANEL = "/DLC_Storm/UI/Screens/Strategy/MissionSelect/WBP_MissionModsPanel_THREAT"
 FN = "MMS_AddRegisteredOptions"
+FN_CHANGED = "MMS_OnExtraRowChanged"
+TAG_HIDE_VILLAIN = "Mission.ThreatRoomOption.Hide.Villain"
 TAG_ENEMY, TAG_VILLAIN, TAG_ROW = "Mission.AllowedEnemies", "Mission.RandomVillain", "Mission.ThreatRoomOption"
 VANILLA_ENTRIES = ["Entry_Hydra", "Entry_Soulless", "Entry_Lilin", "Entry_Vampyres", "Entry_None", "Entry_FallenVenom",
                    "Entry_Crossbones", "Entry_FallenScarletWitch", "Entry_FallenSabretooth", "Entry_DreadMaiden",
@@ -102,14 +107,14 @@ def build(out_root):
     I["mmf"] = p.imp("/Script/CodaGame:MissionMod_ModifyFacts", "/Script/CoreUObject", "Class")
     p.imp("/Script/GameplayTags", "/Script/CoreUObject", "Package")
     p.imp("/Script/GameplayTags:BlueprintGameplayTagLibrary", "/Script/CoreUObject", "Class")
-    for f in ("MatchesTag", "BreakGameplayTagContainer", "GetNumGameplayTagsInContainer"):
+    for f in ("MatchesTag", "BreakGameplayTagContainer", "GetNumGameplayTagsInContainer", "HasTag"):
         I[f] = p.imp(f"/Script/GameplayTags:BlueprintGameplayTagLibrary.{f}", "/Script/CoreUObject", "Function")
     I["tag"] = p.imp("/Script/GameplayTags:GameplayTag", "/Script/CoreUObject", "ScriptStruct")
     I["tagc"] = p.imp("/Script/GameplayTags:GameplayTagContainer", "/Script/CoreUObject", "ScriptStruct")
     for f in ("Array_Find", "Array_Contains", "Array_Insert", "Array_Add", "Array_Get", "Array_Length"):
         I[f] = p.imp(f"/Script/Engine:KismetArrayLibrary.{f}", "/Script/CoreUObject", "Function")
     I["arraylib"] = imp("/Script/Engine:Default__KismetArrayLibrary")
-    for f in ("Less_IntInt", "Add_IntInt", "EqualEqual_IntInt", "NotEqual_IntInt", "Greater_IntInt"):
+    for f in ("Less_IntInt", "Add_IntInt", "EqualEqual_IntInt", "NotEqual_IntInt", "Greater_IntInt", "GreaterEqual_IntInt"):
         I[f] = p.imp(f"/Script/Engine:KismetMathLibrary.{f}", "/Script/CoreUObject", "Function")
     I["Conv_TextToString"] = imp("/Script/Engine:KismetTextLibrary.Conv_TextToString")
     p.imp("/Script/UMG:PanelWidget", "/Script/CoreUObject", "Class")
@@ -175,6 +180,7 @@ def build(out_root):
     fexp = E[F - 1]
     navfn, popfn = E[NAVFN - 1], E[POPFN - 1]
     ub = next(e for e in E if e["ObjectName"] == UBN)
+    UB = X[UBN]
 
     def lprop(src_exp, name, new, **kw):
         q = copy.deepcopy(next(x for x in src_exp["LoadedProperties"] if x["Name"] == name))
@@ -214,6 +220,8 @@ def build(out_root):
             q["Inner"]["Name"] = name
         elif kind == "delegate":
             q = lprop(navfn, "K2Node_CreateDelegate_OutputDelegate", name)
+        elif kind == "changed":                                   # MulticastControlSignature, as the panel binds
+            q = lprop(ub, "K2Node_CreateDelegate_OutputDelegate", name)
         L.append(q)
         return name
     V = {}
@@ -225,7 +233,8 @@ def build(out_root):
         ("Tag", "struct", {"struct": I["tag"], "size": 8}), ("Label", "text", {}), ("Key", "str", {}),
         ("Row", "obj", {"cls": I["item"]}), ("Created", "obj", {"cls": I["userwidget"]}),
         ("PC", "obj", {"cls": I["pc"]}), ("Slot", "obj", {"cls": I["panelslot"]}),
-        ("Vanilla", "objarray", {}), ("Nav", "delegate", {}),
+        ("Vanilla", "objarray", {}), ("Nav", "delegate", {}), ("hide", "bool", {}), ("idx", "int", {}),
+        ("Changed", "changed", {}),
     ]:
         V[name] = local("MMS_" + name, kind, **kw)
     gi_src = next(x for x in popfn["LoadedProperties"] if x["Name"] == "CallFunc_GetInstance_ReturnValue")
@@ -303,15 +312,19 @@ def build(out_root):
     a = Asm(F)
     W = kis.local("Which", F)
     a.emit(let_b(V["b"], math("EqualEqual_IntInt", W, kis.int_const(3))))
-    a.if_not(lv(V["b"]), "COLLECT")
-    # Which 3: select every extra row's first (default) choice
+    a.if_not(lv(V["b"]), "CHK4")
+    # Which 3: select every extra row's first (default) choice, then the hiding below
     a.emit(let_l(V["k"], kis.int_const(0)))
     a.label("SEL")
-    loop_head(a, V["k"], sv("MMS_Rows"), "RET")
+    loop_head(a, V["k"], sv("MMS_Rows"), "HIDE")
     a.emit(arr("Array_Get", [sv("MMS_Rows"), lv(V["k"]), lv(V["Row"])]))
     inc(a, V["k"])
     a.emit(vcall(lv(V["Row"]), "SetSelection", [kis.int_const(0)]))
     a.goto("SEL")
+    a.label("CHK4")
+    a.emit(let_b(V["b"], math("EqualEqual_IntInt", W, kis.int_const(4))))
+    a.if_not(lv(V["b"]), "COLLECT")
+    a.goto("HIDE")
 
     a.label("COLLECT")
     # Which 2 runs once per panel: rows already made (a second Construct) stay as they are
@@ -435,7 +448,59 @@ def build(out_root):
     kis.replace_field(setnav, "K2Node_DynamicCast_AsWBP_Mission_Mod_Item_Dropdown", V["Row"])
     kis.replace_field(setnav, "K2Node_CreateDelegate_OutputDelegate", V["Nav"])
     a.emit(setnav)
+    ubst = ub["ScriptBytecode"]
+    bind2 = kis.set_owner(copy.deepcopy(next(st for st in ubst if pr.e(st).endswith(".Bind(self, On Difficulty Changed)"))), UB, F)
+    bind2["Delegate"], bind2["FunctionName"] = lv(V["Changed"]), FN_CHANGED
+    a.emit(bind2)
+    addd = kis.set_owner(copy.deepcopy(next(st for st in ubst if kis.kind(st) == "EX_AddMulticastDelegate")), UB, F)
+    addd["Delegate"]["ObjectExpression"]["ObjectExpression"] = lv(V["Row"])    # self.MissionLevel -> the row
+    addd["DelegateToAdd"] = lv(V["Changed"])
+    a.emit(addd)
     a.goto("PLACE")
+
+    # Which 4 (and after 3): hide Villain while a selected choice says so, reset it to None; else show it (Tier III)
+    a.label("HIDE")
+    a.emit(let_b(V["hide"], kis.false()))
+    a.emit(let_l(V["k"], kis.int_const(0)))
+    a.label("HLOOP")
+    loop_head(a, V["k"], sv("MMS_Rows"), "HAPPLY")
+    a.emit(arr("Array_Get", [sv("MMS_Rows"), lv(V["k"]), lv(V["Row"])]))
+    inc(a, V["k"])
+    a.emit(let_l(V["idx"], get(lv(V["Row"]), "CurrentIndex", I["item"])))
+    a.emit(let_b(V["b"], math("GreaterEqual_IntInt", lv(V["idx"]), kis.int_const(0))))
+    a.if_not(lv(V["b"]), "HLOOP")
+    a.emit(let_l(V["n"], arr("Array_Length", [get(lv(V["Row"]), "MissionMods", I["item"])], V["n"])))
+    a.emit(let_b(V["b"], math("Less_IntInt", lv(V["idx"]), lv(V["n"]))))
+    a.if_not(lv(V["b"]), "HLOOP")
+    a.emit(arr("Array_Get", [get(lv(V["Row"]), "MissionMods", I["item"]), lv(V["idx"]), lv(V["T"])]))
+    a.emit(let_l(V["n"], arr("Array_Length", [get(lv(V["T"]), "MissionModToApply", I["smm"])], V["n"])))
+    a.emit(let_b(V["b"], math("Greater_IntInt", lv(V["n"]), kis.int_const(0))))
+    a.if_not(lv(V["b"]), "HLOOP")
+    a.emit(arr("Array_Get", [get(lv(V["T"]), "MissionModToApply", I["smm"]), kis.int_const(0), lv(V["M"])]))
+    a.emit(kis.let(lv(V["MF"]), cast(I["mmf"], lv(V["M"]))))
+    a.emit(let_b(V["b"], tobool(lv(V["MF"]))))
+    a.if_not(lv(V["b"]), "HLOOP")
+    a.emit(let_b(V["b"], math("HasTag", get(lv(V["MF"]), "FactTags", I["mmf"]), tagconst(TAG_HIDE_VILLAIN), kis.true())))
+    a.if_not(lv(V["b"]), "HLOOP")
+    a.emit(let_b(V["hide"], kis.true()))
+    a.goto("HLOOP")
+    a.label("HAPPLY")
+    vis = next(st for st in ubst if pr.e(st) == "self.SquadSize->SetVisibility(4)")
+    a.if_not(lv(V["hide"]), "SHOW")
+    hidev = kis.replace_field(copy.deepcopy(vis), "SquadSize", "Villain")
+    hidev["ContextExpression"]["Parameters"][0]["Value"] = 1                    # ESlateVisibility::Collapsed
+    a.emit(hidev)
+    a.emit(kis.replace_field(copy.deepcopy(next(st for st in ubst if pr.e(st) == "self.Villain->SetSelection(0)")), "x", "x"))
+    a.goto("RET")
+    a.label("SHOW")
+    t2 = copy.deepcopy(next(st for st in ubst if "EvaluateStrategyConditionSet(self, self.ConditionsT2" in pr.e(st)))
+    t2["VariableExpression" if "VariableExpression" in t2 else "Variable"] = lv(V["b"])
+    if "Value" in t2 and isinstance(t2["Value"], dict) and "New" in t2["Value"]:
+        t2["Value"] = kis.fp(V["b"], F)
+    a.emit(t2)
+    a.if_not(lv(V["b"]), "RET")
+    a.emit(kis.replace_field(copy.deepcopy(vis), "SquadSize", "Villain"))
+    a.goto("RET")
     a.finish(d, FN)
 
     # ---- the function's preload list: everything its bytecode and locals name (as the cooker writes it)
@@ -473,6 +538,18 @@ def build(out_root):
     cls["CreateBeforeSerializationDependencies"].insert(0, F)
     fexp["SerializationBeforeSerializationDependencies"] = []
 
+    # ---- MMS_OnExtraRowChanged(TargetControl, Value): bound to each extra row's dropdown, runs the hiding (Which 4)
+    F2 = dup(X["On Difficulty Changed"], FN_CHANGED)
+    f2 = E[F2 - 1]
+    f2["ScriptBytecode"] = [{"$type": kis.T("EX_LocalVirtualFunction"), "VirtualFunctionName": FN,
+                             "Parameters": [kis.int_const(4)]}, kis.ret_nothing(), {"$type": kis.T("EX_EndOfScript")}]
+    f2["CreateBeforeSerializationDependencies"] = [x for x in f2["CreateBeforeSerializationDependencies"] if x < 0]
+    cls["FuncMap"].append([FN_CHANGED, F2])
+    if isinstance(cls.get("Children"), list):
+        cls["Children"].append(F2)
+    cls["CreateBeforeSerializationDependencies"].insert(0, F2)
+    p.name(FN_CHANGED)
+
     # ---- calls from the ubergraph
     ubs = ub["ScriptBytecode"]
     txt = [pr.e(st) for st in ubs]
@@ -493,9 +570,11 @@ def build(out_root):
     sel_fn = next(e for e in E if e["ObjectName"] == "SetSelection" and e.get("ScriptBytecode"))
     i_sel = ue.kismet_offsets(d)[UBN].index(sel_fn["ScriptBytecode"][0]["Parameters"][0]["Value"])
     show = kis.replace_field(copy.deepcopy(ubs[i_vis]), "SquadSize", "MMS_ExtraRows")
+    start_fn = next(e for e in E if e["ObjectName"] == "OnStartMission" and e.get("ScriptBytecode"))
+    i_start = ue.kismet_offsets(d)[UBN].index(start_fn["ScriptBytecode"][0]["Parameters"][0]["Value"])
     kis.insert(d, UBN, [(i_enemy, [call(0)]), (i_vil, [call(1)]), (i_t1, [call(2)]), (i_vis + 1, [show]),
-                        (i_sel, [call(3)])], ubergraph=True)
-    for n in (FN, "MMS_ExtraRows", TAG_ENEMY, TAG_VILLAIN, TAG_ROW, "SetSelection"):
+                        (i_start, [call(4)]), (i_sel, [call(3)])], ubergraph=True)
+    for n in (FN, FN_CHANGED, "MMS_ExtraRows", TAG_ENEMY, TAG_VILLAIN, TAG_ROW, TAG_HIDE_VILLAIN, "SetSelection"):
         p.name(n)
     msg = ue.fix_offsets(d)
     for e in d["Exports"]:

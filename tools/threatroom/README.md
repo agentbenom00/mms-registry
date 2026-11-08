@@ -26,12 +26,17 @@ It needs the game's paks (Steam install, path in `lib/ue.py`), repak 0.2.3 and t
     options.
   - With `Which` 2, the choice that adds no fact goes first. The rows are put in the box and added to
     `AllMissionMods`, so they get the mission ID and are applied on start, and they get the left-navigation rule.
-  - `Which` 3 selects every row's first choice.
+  - `Which` 3 selects every row's first choice, then runs `Which` 4.
+  - `Which` 4 hides the Villain row (and resets it to None) while a selected choice's mission mod has
+    `Mission.ThreatRoomOption.Hide.Villain`, and shows it again otherwise, as the game does with Tier III.
+- **Function `MMS_OnExtraRowChanged(TargetControl, Value)`:** bound to each extra row's `OnChangedCallback` (after
+  the row's own handler, which updates `CurrentIndex`); it runs `Which` 4.
 - **Calls in the event graph:**
   - 0 just before Enemy Type gets its mods, after the Lilin check has run.
   - 1 just before Villain gets its mods, after the unlock checks.
   - 2 after `AllMissionMods` is built in Construct.
   - 3 at the start of `SetSelection`.
+  - 4 at the start of `OnStartMission`, before the dropdowns apply their mods.
 
 Every statement copies a shape from the game's own bytecode (the panel's, `PopulateGameDifficultyDropDown`'s,
 `WBP_CodaDropdown`'s). Context skip sizes come from `uasset-json fix-offsets`, which changes nothing in the game's

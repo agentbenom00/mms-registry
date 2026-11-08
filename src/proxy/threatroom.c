@@ -44,6 +44,16 @@ static uint8_t *mmsd_apply(const uint8_t *delta, size_t dn, const uint8_t *src, 
     return out;
 }
 
+// which shared panel this build writes (a hash of its patches), for the registry's state record: a registry update
+// that changes the panel then rebuilds the registry pak
+const char *threatroom_panel_id(void)
+{
+    static char id[17];
+    if (!id[0]) snprintf(id, sizeof id, "%016llx", (unsigned long long)(fnv1a64(TRP_UASSET, sizeof TRP_UASSET) ^
+                                                                          (fnv1a64(TRP_UEXP, sizeof TRP_UEXP) * 31)));
+    return id;
+}
+
 static int panel_filter(const char *dir, const char *name, void *ctx)
 {
     (void)ctx;

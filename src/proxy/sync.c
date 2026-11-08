@@ -444,13 +444,13 @@ static int threatroom_options(const scan_result *s)
     return n;
 }
 
-// what the registry does with the Threat Room panel: "" (no options), "shared" (it ships the shared panel) or
+// what the registry does with the Threat Room panel: "none" (no options), "shared:<panel id>" (it ships the shared panel) or
 // "skipped:<pak>" (that pak ships its own panel, which would replace the shared one)
 static void threatroom_status(const scan_result *s, char *out, size_t n)
 {
     if (!threatroom_options(s)) snprintf(out, n, "none");
     else if (s->panel_pak) snprintf(out, n, "skipped:%s", s->panel_pak);
-    else snprintf(out, n, "shared");
+    else snprintf(out, n, "shared:%s", threatroom_panel_id());
 }
 
 static int cmp_manifest_id(const void *a, const void *b)

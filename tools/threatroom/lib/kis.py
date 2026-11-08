@@ -123,6 +123,8 @@ def field_names(stmts):
             out.append(n["Value"])
         elif "VirtualFunctionName" in n:
             out.append(n["VirtualFunctionName"])
+        elif isinstance(n.get("FunctionName"), str):              # EX_BindDelegate / EX_InstanceDelegate
+            out.append(n["FunctionName"])
     walk(stmts, f)
     return out
 

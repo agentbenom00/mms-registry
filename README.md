@@ -139,6 +139,11 @@ none):
 
 - In a row of its own, the choice whose mission mod adds no fact (only removes) comes first and is selected every
   time the panel opens. The others follow in the order the game lists them.
+- **Hiding Villain (2.3.0):** a choice whose mission mod's `FactTags` also has `Mission.ThreatRoomOption.Hide.Villain`
+  hides the Villain row while it's selected and resets Villain to None. Villain comes back (with the Tier III
+  upgrade) when no selected choice has that tag. The panel checks when a row changes, when it opens and at Start.
+  Register the tag in your tags ini, and remove it with your other choices (`FactTagsToRemove`), since it's also a
+  fact on the room's mission.
 - The room's mission keeps its facts from one start to the next, so each choice's mission mod must remove the facts
   of the other choices in its row (`FactTagsToRemove`). Make your own tags, and register them in a
   `Config/Tags/*.ini`.

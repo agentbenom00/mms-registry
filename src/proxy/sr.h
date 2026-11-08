@@ -10,7 +10,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define MMS_REGISTRY_VERSION "2.2.0"                        // the release; also in the marker and the log
+#define MMS_REGISTRY_VERSION "2.3.0"                        // the release; also in the marker and the log
 #define REG_PAK L"zz_MidnightSuns_SuitRegistry_P.pak"
 #define REG_PAK_OLD L"zzzzzzzzzz_DragonCore_EngineRegistry_P.pak"   // the previous name: removed when found
 #define STATE_PATH "CodaGame/SuitRegistry/state.json"
@@ -161,6 +161,7 @@ uint8_t *reg_build(reg *r, size_t *n);
 #define TRP_DIR "CodaGame/Plugins/DLC_Storm/Content/UI/Screens/Strategy/MissionSelect/"
 #define TRP_NAME "WBP_MissionModsPanel_THREAT"
 int threatroom_write(pak *pks, int npks, pak_writer *w);   // 1 = written into the registry pak, 0 = not possible (logged)
+const char *threatroom_panel_id(void);                      // which shared panel this build writes (for the state record)
 
 // ---- the sync
 int sync_quick_check(const wchar_t *paks);                  // in DllMain: 1 = something to do (or unsure)
