@@ -7,7 +7,7 @@ if not defined ZIG set ZIG=zig
 set OUT=%ROOT%MidnightSuns\Binaries\Win64
 if not exist "%OUT%" mkdir "%OUT%"
 pushd "%ROOT%src\proxy"
-"%ZIG%" cc -target x86_64-windows-gnu -shared -O2 -s -Wall -Wno-unused-function -Wl,--image-base=0x180000000 -o "%OUT%\version.dll" version.c util.c zlib.c pak.c oodle.c json.c registry.c sync.c version.def
+"%ZIG%" cc -target x86_64-windows-gnu -shared -O2 -s -Wall -Wno-unused-function -Wl,--image-base=0x180000000 -o "%OUT%\version.dll" version.c util.c zlib.c pak.c oodle.c json.c registry.c sync.c threatroom.c version.def
 if errorlevel 1 (popd & echo BUILD FAILED & exit /b 1)
 popd
 if exist "%OUT%\version.lib" del "%OUT%\version.lib"

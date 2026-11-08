@@ -11,7 +11,7 @@ rm -rf "$out" "$here/dist/MidnightSuns-MMSRegistry.zip"
 mkdir -p "$out/MidnightSuns/Binaries/Win64"
 (cd "$here/src/proxy" && "$zig" cc -target x86_64-windows-gnu -shared -O2 -s -Wall -Wno-unused-function \
   -Wl,--image-base=0x180000000 -o "$out/MidnightSuns/Binaries/Win64/version.dll" \
-  version.c util.c zlib.c pak.c oodle.c json.c registry.c sync.c version.def)
+  version.c util.c zlib.c pak.c oodle.c json.c registry.c sync.c threatroom.c version.def)
 rm -f "$out/MidnightSuns/Binaries/Win64/version.lib"
 cp "$here/README.txt" "$out/"
 (cd "$out" && python3 -c 'import shutil; shutil.make_archive("../MidnightSuns-MMSRegistry", "zip", ".")')

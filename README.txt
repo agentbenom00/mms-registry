@@ -44,6 +44,13 @@ WHAT TO EXPECT
 - Log: %LOCALAPPDATA%\MidnightSunsSuitRegistry\SuitRegistry.log (Linux: inside the game's Proton prefix).
 
 
+THE ENHANCED T.H.R.E.A.T. ROOM (2.2.0)
+--------------------------------------
+Mods can add choices and rows to the Enhanced T.H.R.E.A.T. Room's options panel (Storm DLC). When one is
+installed, the registry puts one shared panel into its pak, rebuilt from your own game files, and that panel
+lists all of them. A mod that still ships its own copy of the panel replaces the shared one: the report names
+that pak in red. Mod authors: see "Threat Room options" in README.md on the project page.
+
 FOR MOD AUTHORS
 ---------------
 Each hero, suit, palette, gear or ability pak carries a manifest at  CodaGame/SuitMods/<id>.json  (the game ignores it):

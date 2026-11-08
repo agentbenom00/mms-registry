@@ -10,6 +10,8 @@
 // entry, so one donor can be cloned more than once (e.g. extra palettes cloned from one original palette).
 // The registry pak also carries CodaGame/SuitRegistry/state.json: what it was built from (game pak sizes/dates and
 // the manifests' hashes). It is rebuilt only when that no longer matches what is installed.
+// Threat Room options (StrategyMissionMods sources, the "threatroom" kind) also put the shared Threat Room panel into
+// the registry pak (threatroom.c), unless an installed pak ships its own WBP_MissionModsPanel_THREAT.
 #include "sr.h"
 
 // More label-only categories, recognised by a folder in the source path. Every one of them is cloned by exactly the
@@ -20,7 +22,9 @@ static const extra_kind EXTRA[] = {
     {"stage", "stage", "stages", "/Templates/Stages/", NULL},
     {"objective", "objective", "objectives", "/Templates/Objectives/", NULL},
     {"encounter", "encounter", "encounters", "/Templates/Encounters/", NULL},
-    {"mission", "mission", "missions", "/Templates/Missions/", NULL},
+    // a Threat Room option (StrategyMissionMod_ApplyMissionMod): also makes the registry install the shared Threat Room panel
+    {"threatroom", "Threat Room option", "Threat Room options", "/StrategyMissionMods/", NULL},
+    {"mission", "mission", "missions", "/Templates/Missions/", "/StrategyMissionMods/"},
     {"challenge", "challenge", "challenges", "/Templates/Challenges/", NULL},
     {"combatbonus", "combat bonus", "combat bonuses", "/Templates/CombatBonuses/", NULL},
     {"reward", "reward", "rewards", "/Templates/Rewards/", NULL},
@@ -98,6 +102,7 @@ typedef struct {
     buf game;                                                   // fingerprint JSON
     char **warn; int nwarn;
     int unsure;                                                 // quick mode: could not decide here
+    char *panel_pak;                                            // a pak that ships its own Threat Room panel (the first one)
 } scan_result;
 
 static void warn(scan_result *s, const char *fmt, ...)
@@ -283,7 +288,7 @@ static char *rename_name(const char *s, void *ctx)
     return cur;
 }
 
-typedef struct { int registry, json; } mod_filter_ctx;
+typedef struct { int registry, json, panel; } mod_filter_ctx;
 
 static int mod_filter(const char *dir, const char *name, void *ctx)
 {
@@ -291,6 +296,10 @@ static int mod_filter(const char *dir, const char *name, void *ctx)
     if (!_stricmp(dir, "CodaGame/")) {
         if (name && !_strnicmp(name, "AssetRegistry", 13)) c->registry = 1;
         return name == NULL;                                    // only to look at the names
+    }
+    if (!_stricmp(dir, TRP_DIR)) {                              // a pak with its own Threat Room panel
+        if (name && !_stricmp(name, TRP_NAME ".uasset")) c->panel = 1;
+        return name == NULL;
     }
     if (_stricmp(dir, "CodaGame/SuitMods/")) return 0;
     if (!name) return 1;
@@ -392,6 +401,7 @@ static void scan(const wchar_t *paks, int full, scan_result *s)
                     ne = cnt;
                     if (c.registry)
                         warn(s, "%s: ships its own AssetRegistry - it conflicts with the shared registry pak (only one wins)", name8);
+                    if (c.panel && !s->panel_pak) s->panel_pak = xstrdup(name8);
                     for (int k = 0; k < ne; k++) {
                         size_t n = (size_t)e[k].usize;
                         uint8_t *d = pak_read(&pk, &e[k], full);
@@ -425,6 +435,24 @@ static void scan(const wchar_t *paks, int full, scan_result *s)
     buf_u8(&s->game, 0);
 }
 
+// Threat Room options registered by the installed mods
+static int threatroom_options(const scan_result *s)
+{
+    int e = 0, n = 0;
+    while (e < NEXTRA && strcmp(EXTRA[e].kind, "threatroom")) e++;
+    for (int i = 0; i < s->n; i++) n += s->m[i].nextra[e];
+    return n;
+}
+
+// what the registry does with the Threat Room panel: "" (no options), "shared" (it ships the shared panel) or
+// "skipped:<pak>" (that pak ships its own panel, which would replace the shared one)
+static void threatroom_status(const scan_result *s, char *out, size_t n)
+{
+    if (!threatroom_options(s)) snprintf(out, n, "none");
+    else if (s->panel_pak) snprintf(out, n, "skipped:%s", s->panel_pak);
+    else snprintf(out, n, "shared");
+}
+
 static int cmp_manifest_id(const void *a, const void *b)
 {
     return strcmp((*(manifest *const *)a)->id, (*(manifest *const *)b)->id);
@@ -436,7 +464,7 @@ static char *expected_state(scan_result *s)
     for (int i = 0; i < s->n; i++) v[i] = &s->m[i];
     qsort(v, s->n, sizeof *v, cmp_manifest_id);
     buf b = {0};
-    const char *head = "{\"format\":3,\"game\":";
+    const char *head = "{\"format\":4,\"game\":";
     buf_put(&b, head, strlen(head));
     buf_put(&b, s->game.p, strlen((char *)s->game.p));
     buf_put(&b, ",\"suits\":[", 10);
@@ -452,7 +480,11 @@ static char *expected_state(scan_result *s)
         json_str(&b, v[i]->title);
         buf_u8(&b, ']');
     }
-    buf_put(&b, "]}\n", 4);                                     // (with the 0)
+    char tr[300];
+    threatroom_status(s, tr, sizeof tr);
+    buf_put(&b, "],\"threatroom\":", 15);
+    json_str(&b, tr);
+    buf_put(&b, "}\n", 3);                                      // (with the 0)
     free(v);
     return (char *)b.p;
 }
@@ -659,6 +691,13 @@ static void report(scan_result *s)
     fmt_counts(cnt, what, sizeof what);
     log_msg("Found " C_OR "%d" C_WH " mod%s in " C_OR "%d" C_WH " pak%s, adding %s", s->n, s->n == 1 ? "" : "s", npak, npak == 1 ? "" : "s", what);
     overview(cnt);
+    int tro = threatroom_options(s);
+    if (tro && s->panel_pak)
+        log_msg(C_RD "  Threat Room: %d option%s registered, but pak %s ships its own Threat Room panel, which replaces the shared "
+                "one - those options won't show (remove that pak, or ask its author to register its options instead)" C_WH,
+                tro, tro == 1 ? "" : "s", s->panel_pak);
+    else if (tro)
+        log_msg(C_WH "  Threat Room: " C_OR "%d" C_WH " option%s registered - the shared Threat Room panel lists them", tro, tro == 1 ? "" : "s");
     for (int i = 0; i < s->n; i++) {
         manifest *m = &s->m[i];
         if (i == 0 || strcmp(s->m[i - 1].pak, m->pak)) {
@@ -771,6 +810,7 @@ static int build(const wchar_t *paks, scan_result *s, const char *state)
         pak_write_file(w, bins[q].path, out, on, 1);
         free(out);
     }
+    if (threatroom_options(s) && !s->panel_pak) threatroom_write(pks, nn, w);
     pak_write_file(w, STATE_PATH, (const uint8_t *)state, strlen(state), 0);
     pak_write_end(w);
     sr_jmp = outer;
@@ -792,7 +832,7 @@ static void log_changes(const char *have, scan_result *s)
 {
     json *old = json_parse(have, strlen(have));
     json *fmt = json_get(old, "format"), *game = json_get(old, "game"), *suits = json_get(old, "suits");
-    if (!old || !fmt || fmt->num != 3 || !suits || suits->t != J_ARR) {
+    if (!old || !fmt || fmt->num != 4 || !suits || suits->t != J_ARR) {
         log_msg(C_OR "Reason: the registry pak was built by an older version");
         json_free(old);
         return;
@@ -841,6 +881,10 @@ static void log_changes(const char *have, scan_result *s)
         for (int i = 0; i < s->n; i++) still |= !strcmp(s->m[i].id, e->items[0]->s);
         if (!still) { log_msg(C_OR "Reason: " C_WH "removed %s%s" C_WH ": %s", kind_col_name(e->items[2]->s), e->items[2]->s, e->items[3]->s); any = 1; }
     }
+    json *tro = json_get(old, "threatroom");
+    char tr[300];
+    threatroom_status(s, tr, sizeof tr);
+    if (!tro || !tro->s || strcmp(tro->s, tr)) { log_msg(C_OR "Reason: " C_WH "the Threat Room panel changes (%s)", tr); any = 1; }
     if (!any) log_msg(C_OR "Reason: the registry pak's record does not match");
     json_free(old);
 }

@@ -3,7 +3,8 @@
 *Formerly the Midnight Suns Suit Registry.*
 
 A single-file mod for **Marvel's Midnight Suns** that adds **new hero, suit, palette, gear (cards), ability, character, enemy faction and Mirror Table region slots**,
-so any number of those mods work side by side. Drop `version.dll` into the game folder once; from
+so any number of those mods work side by side. Since 2.2.0 it also gives the Enhanced T.H.R.E.A.T. Room one shared
+options panel, so any number of mods can add choices and rows to it. Drop `version.dll` into the game folder once; from
 then on, adding or removing those mods' paks just works, on Steam and Epic.
 
 ## Why
@@ -108,6 +109,49 @@ A hero, suit, palette, gear or ability pak carries a manifest at `CodaGame/SuitM
 - New items need their own `EntitlementID`s and must be free (`bRequirePurchase` false; mod items can't be bought);
   new outfits also need `bUnlockedAtGameStart` true.
 
+## Threat Room options (2.2.0)
+
+The Enhanced T.H.R.E.A.T. Room (the Storm DLC's room upgrade) has one options panel, `WBP_MissionModsPanel_THREAT`. A
+mod that ships its own edited copy of it replaces every other mod's, so the registry offers a shared panel instead.
+When at least one installed mod registers a Threat Room option, the registry rebuilds the game's own panel with the
+patch in `src/proxy/threatroom_panel.h` and puts it in its pak. That panel lists every registered option, so mods
+add Threat Room choices without shipping the panel and without knowing about each other. With no options
+registered, the registry leaves the panel alone.
+
+A Threat Room option is a `StrategyMissionMod_ApplyMissionMod` template whose first `MissionModToApply` is a
+`MissionMod_ModifyFacts`. Ship both, and register the strategy mission mod in your manifest, cloned from one of the
+Storm DLC's (sources under `/StrategyMissionMods/` count as `"kind": "threatroom"`):
+
+```json
+{"format": 1, "id": "EndlessThreatRoom", "title": "Endless Threat Room", "kind": "threatroom",
+ "sources": [{"source": "/DLC_Storm/Templates/Missions/StrategyMissionMods/StrategyMissionMod_AllowedEnemies_OnlyHydra.StrategyMissionMod_AllowedEnemies_OnlyHydra",
+              "rules": [["/DLC_Storm/Templates/Missions/", "/Game/Coda/Templates/Missions/"], ["AllowedEnemies_OnlyHydra", "ThreatMode_Endless"]]}]}
+```
+
+Where the option shows depends on the first tag of its mission mod's `FactTags` (or `FactTagsToRemove`, when it adds
+none):
+
+| Tag under | Shows |
+|---|---|
+| `Mission.AllowedEnemies` | a new choice in **Enemy Type**, labelled with the mission mod's `DisplayName` |
+| `Mission.RandomVillain` | a new choice in **Villain**, labelled with its `DisplayName` |
+| `Mission.ThreatRoomOption` | a choice in a row of its own, above Number of Heroes. Options with the same `Description` share a row, and the `Description` is the row's label; `DisplayName` is the choice's label |
+
+- In a row of its own, the choice whose mission mod adds no fact (only removes) comes first and is selected every
+  time the panel opens. The others follow in the order the game lists them.
+- The room's mission keeps its facts from one start to the next, so each choice's mission mod must remove the facts
+  of the other choices in its row (`FactTagsToRemove`). Make your own tags, and register them in a
+  `Config/Tags/*.ini`.
+- The game's own 13 Enemy Type and Villain options are left as they are, including their unlock conditions.
+- What a choice does is up to your mod: the panel only applies the strategy mission mod when the fight starts. A
+  faction or villain still needs its entries in the room's enemy groups, and a mode needs its own fight logic.
+- **Don't ship `WBP_MissionModsPanel_THREAT`.** A pak that does replaces the shared panel. The registry then leaves
+  its own panel out and the report names that pak in red.
+
+The panel's script and the patch are made by [`tools/threatroom`](tools/threatroom/README.md) from the game's own
+file. The release ships only the patch (copy and insert operations, about 12 KB), never the game file. If a game
+update changes the panel, the patch no longer applies; the registry says so and leaves the panel alone.
+
 ## How it works
 
 - **Loading:** the game imports `version.dll`, and Windows looks next to the exe first. Exports that `kernelbase.dll`
@@ -120,7 +164,8 @@ A hero, suit, palette, gear or ability pak carries a manifest at `CodaGame/SuitM
   itself to `%LOCALAPPDATA%\MidnightSunsSuitRegistry\SuitRegistrySync.dll` and runs
   `rundll32 SuitRegistrySync.dll,SuitRegistrySync --from-game <Paks>`, waiting for it before the game continues.
   It reads the game's registries straight from its paks, appends the cloned entries (existing indices never move)
-  and writes the registry pak.
+  and writes the registry pak. With Threat Room options installed, it also rebuilds the game's Threat Room panel with
+  the patch and adds it to the pak.
 - Plain C, no dependencies besides Windows: pak reader (v3-v11, AES via bcrypt) and writer (v11, Zlib),
   inflate/deflate, CityHash64, a small JSON parser and the AssetRegistry v8 patcher.
 
@@ -130,7 +175,9 @@ A hero, suit, palette, gear or ability pak carries a manifest at `CodaGame/SuitM
 | `src/proxy/sync.c` | scanning mod paks and manifests, the state record, the rebuild |
 | `src/proxy/pak.c` | pak reading and writing |
 | `src/proxy/registry.c` | AssetRegistry (version 8, FixedTags) parsing and patching |
+| `src/proxy/threatroom.c` | the shared Threat Room panel: applies the patch in `threatroom_panel.h` to the game's own panel |
 | `src/proxy/zlib.c`, `oodle.c`, `json.c`, `util.c` | compression, Oodle loading, JSON, buffers/log/hashes |
+| `tools/threatroom/` | makes the shared panel and its patch (Python, UAssetAPI); see its README |
 
 ## Building
 
