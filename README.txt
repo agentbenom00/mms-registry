@@ -39,6 +39,10 @@ WHAT TO EXPECT
 - If the game is in a protected folder (e.g. C:\Program Files\Epic Games) Windows asks for permission to update the
   registry pak.
 - If something is wrong (e.g. a suit made for DLC you don't have) a message says so, and the game still starts.
+- Leave the window open until the game starts. A rebuild that is stopped partway (the window closed, or an antivirus
+  ending it) leaves a log without "Done." at the end and can leave zz_MidnightSuns_SuitRegistry_P.pak.tmp in
+  Content\Paks: delete that file and start the game again. Since 2.5.0 a rebuild that fails with an error deletes its
+  .tmp itself.
 - "Verify game files" on Steam/Epic may remove version.dll: just copy it in again.
 - Another mod that also uses version.dll can't be used at the same time.
 - Log: %LOCALAPPDATA%\MidnightSunsSuitRegistry\SuitRegistry.log (Linux: inside the game's Proton prefix).
@@ -121,6 +125,19 @@ rules, which replace the global ones for that entry:
 
   {"source": "/Game/.../HeroSkinPalette_HR_SPDR_DemonSpider.HeroSkinPalette_HR_SPDR_DemonSpider",
    "rules": [["HeroSkinPalette_HR_SPDR_DemonSpider", "HeroSkinPalette_HR_SPDR_BigTime4"], ["DemonSpider", "BigTime"]]}
+
+Shared game files (2.5.0): a game file that several mods change (e.g. Strategy_Master, the Abbey map each mod streams
+its levels from) can only come from one pak. Put your version of it in a folder of your own under CodaGame/SuitMods/
+in your pak, don't ship it at its real path, and list it in the manifest with a "build" id for this version:
+
+  "build": "e5ede65e3ef1",
+  "files": [{"with": [], "files": {"CodaGame/Content/Coda/Maps/Strategy/Strategy_Master.umap": "CodaGame/SuitMods/mymod/Strategy_Master.umap",
+                                  "CodaGame/Content/Coda/Maps/Strategy/Strategy_Master.uexp": "CodaGame/SuitMods/mymod/Strategy_Master.uexp"}},
+            {"with": ["othermod@<its build>"], "files": {...a version with both mods' changes...}}]
+
+A version counts when every mod in its "with" is installed (at that build, if one is named). The one made with the most
+installed mods wins (ties: the pak whose name sorts last), and the registry copies its files into its own pak at their
+real paths. A manifest may have only "files". "files" can also be one {"real path": "path in your pak"} map.
 
 New in this build (merged from 1.1 + 1.2.0 + blueprint cloning)
 ---------------------------------------------------------------

@@ -64,6 +64,8 @@ static const extra_kind EXTRA[] = {
     // never guessed from a path: they are only counted when the manifest says "kind": "faction" / "region"
     {"faction", "faction", "factions", NULL, NULL},
     {"region", "region", "regions", NULL, NULL},
+    // not a template kind: a manifest that only carries versions of shared game files ("files", see choose_files)
+    {"files", "shared game file", "shared game files", NULL, NULL},
 };
 #define MAXEXTRA 64
 #define NEXTRA ((int)(sizeof EXTRA / sizeof *EXTRA))
@@ -81,8 +83,24 @@ static int is_blueprint_src(const char *src)
 
 typedef struct { char **from, **to; int n; } ruleset;
 
+// Shared game files (2.5.0). A game file that several mods change (e.g. Strategy_Master, the Abbey level they each
+// stream their own levels from) can only come from one pak. Such a mod ships its versions of the file under
+// CodaGame/SuitMods/<folder>/ (the game ignores them) and lists them in its manifest:
+//   "build": "<an id of this version of the mod's shared files>",
+//   "files": [{"with": [], "files": {"CodaGame/Content/.../X.umap": "CodaGame/SuitMods/mymod/X.umap", ...}},
+//             {"with": ["othermod@<its build>"], "files": {...a version with both mods' changes...}}]
+// ("files" may also be a single {"game path": "path in the pak"} map: one version, made for no other mod.)
+// A version is usable when every mod in its "with" is installed (with that "build", when one is named after an @). Of
+// the usable versions of a package (X.umap/X.uasset, X.uexp and X.ubulk count as one), the one made with the most
+// installed mods wins (ties: the pak whose name sorts last, as in the game), and the registry writes its files into
+// the registry pak at their real paths. Mods using this must not ship those files at the real path themselves.
+typedef struct { char *target, *source; int64_t size; int found; } shared_file;
+typedef struct { char **with; int nwith; shared_file *f; int nf; int bad; } file_group;
+
 typedef struct {
     char *id, *title, *pak, hash[17];
+    char *build;                                                // "build": names this version of its shared files
+    file_group *groups; int ngroups;                            // "files": its versions of shared game files
     char **sources; int nsrc;
     ruleset *src_rules;                                         // per source; n < 0 = use the global rules
     ruleset rules;
@@ -97,12 +115,15 @@ typedef struct {
     int ngear, nabil, nproj, nchar, nanim, nmod, neffect, nkeyword;                                    // gear items / abilities it registers, projectiles it clones
 } manifest;
 
+typedef struct { char *key; int m, g; } file_choice;            // a shared package and the version used (manifest, group)
+
 typedef struct {
     manifest *m; int n;
     buf game;                                                   // fingerprint JSON
     char **warn; int nwarn;
     int unsure;                                                 // quick mode: could not decide here
     char *panel_pak;                                            // a pak that ships its own Threat Room panel (the first one)
+    file_choice *fc; int nfc;                                   // shared game files: the version of each (choose_files)
 } scan_result;
 
 static void warn(scan_result *s, const char *fmt, ...)
@@ -168,6 +189,101 @@ static void parse_rules(json *rules, ruleset *rs, const char *pak)
     rs->n = rules->n;
 }
 
+#define HAS_PREFIX(s, lit) (!_strnicmp((s), (lit), sizeof(lit) - 1))
+
+static int bad_rel_path(const char *p)
+{
+    return !*p || *p == '/' || p[strlen(p) - 1] == '/' || strchr(p, '\\') || strchr(p, ':') || strstr(p, "..") || strstr(p, "//");
+}
+
+static void check_shared_paths(const char *target, const char *source, const char *pak)
+{
+    if (bad_rel_path(target) || !HAS_PREFIX(target, "CodaGame/"))
+        sr_fail("%s: \"%s\" in \"files\" in its manifest must be a game file path (CodaGame/Content/...)", pak, target);
+    if (HAS_PREFIX(target, "CodaGame/SuitMods/") || HAS_PREFIX(target, "CodaGame/SuitRegistry/") ||
+        HAS_PREFIX(target, "CodaGame/AssetRegistry") || HAS_PREFIX(target, TRP_DIR TRP_NAME "."))
+        sr_fail("%s: \"files\" in its manifest can't replace %s (the registry makes that file itself)", pak, target);
+    if (bad_rel_path(source) || !HAS_PREFIX(source, "CodaGame/SuitMods/") || !strchr(source + sizeof "CodaGame/SuitMods/" - 1, '/'))
+        sr_fail("%s: its version of %s must be in a folder under CodaGame/SuitMods/ in the pak (not %s)", pak, target, source);
+}
+
+// "build" and "files" (shared game files, see file_group)
+static void parse_files(manifest *m, json *j, const char *pak)
+{
+    json *b = json_get(j, "build"), *files = json_get(j, "files");
+    if (b && b->t != J_STR) sr_fail("%s: \"build\" in its manifest must be text", pak);
+    m->build = b ? xstrdup(b->s) : NULL;
+    if (!files) return;
+    int list = files->t == J_ARR;
+    if (!list && files->t != J_OBJ) sr_fail("%s: \"files\" in its manifest must be a list of {\"with\": [...], \"files\": {...}}", pak);
+    int ng = list ? files->n : 1;
+    m->groups = xcalloc(ng + 1, sizeof(file_group));
+    for (int g = 0; g < ng; g++) {
+        json *o = list ? files->items[g] : files, *map = o;
+        file_group *fg = &m->groups[g];
+        if (list) {
+            if (o->t != J_OBJ) sr_fail("%s: each entry of \"files\" in its manifest must be {\"with\": [...], \"files\": {...}}", pak);
+            map = json_get(o, "files");
+            fg->with = str_array(json_get(o, "with"), &fg->nwith, "with", pak);
+            for (int w = 0; w < fg->nwith; w++)
+                if (!fg->with[w][0] || fg->with[w][0] == '@') sr_fail("%s: \"with\" in its manifest holds mod ids (\"id\" or \"id@build\")", pak);
+        }
+        if (!map || map->t != J_OBJ || !map->n)
+            sr_fail("%s: each version in \"files\" in its manifest needs \"files\": {\"game file path\": \"path in the pak\", ...}", pak);
+        fg->f = xcalloc(map->n + 1, sizeof(shared_file));
+        for (int i = 0; i < map->n; i++) {
+            if (!map->keys[i] || map->items[i]->t != J_STR) sr_fail("%s: \"files\" in its manifest maps game file paths to paths in the pak", pak);
+            check_shared_paths(map->keys[i], map->items[i]->s, pak);
+            fg->f[i].target = xstrdup(map->keys[i]);
+            fg->f[i].source = xstrdup(map->items[i]->s);
+        }
+        fg->nf = map->n;
+    }
+    m->ngroups = ng;
+}
+
+// a game file's package: its path without the extension (X.umap, X.uexp and X.ubulk are one package)
+static void pkg_key(const char *path, char *out, size_t n)
+{
+    snprintf(out, n, "%s", path);
+    char *slash = strrchr(out, '/'), *dot = strrchr(out, '.');
+    if (dot && (!slash || dot > slash)) *dot = 0;
+}
+
+static int group_has(const file_group *fg, const char *key)
+{
+    char k[1024];
+    for (int f = 0; f < fg->nf; f++) {
+        pkg_key(fg->f[f].target, k, sizeof k);
+        if (!_stricmp(k, key)) return 1;
+    }
+    return 0;
+}
+
+static int files_kind(void)
+{
+    static int e = -1;
+    if (e < 0) for (int i = 0; i < NEXTRA; i++) if (!strcmp(EXTRA[i].kind, "files")) e = i;
+    return e;
+}
+
+// how many packages a manifest has versions of
+static int count_packages(const manifest *m)
+{
+    char **keys = NULL, k[1024];
+    int n = 0;
+    for (int g = 0; g < m->ngroups; g++)
+        for (int f = 0; f < m->groups[g].nf; f++) {
+            pkg_key(m->groups[g].f[f].target, k, sizeof k);
+            int seen = 0;
+            for (int q = 0; q < n; q++) seen |= !_stricmp(keys[q], k);
+            if (!seen) { keys = xrealloc(keys, sizeof(char *) * (n + 1)); keys[n++] = xstrdup(k); }
+        }
+    for (int q = 0; q < n; q++) free(keys[q]);
+    free(keys);
+    return n;
+}
+
 static void parse_manifest(manifest *m, const uint8_t *data, size_t n, const char *pak)
 {
     memset(m, 0, sizeof *m);
@@ -179,11 +295,13 @@ static void parse_manifest(manifest *m, const uint8_t *data, size_t n, const cha
     m->title = xstrdup(title && title->t == J_STR ? title->s : id->s);
     m->pak = xstrdup(pak);
     snprintf(m->hash, sizeof m->hash, "%016llx", (unsigned long long)fnv1a64(data, n));
-    if (!src || src->t != J_ARR || !src->n) sr_fail("%s: its manifest has no \"sources\"", pak);
-    m->nsrc = src->n;
-    m->sources = xmalloc(sizeof(char *) * (src->n + 1));
-    m->src_rules = xcalloc(src->n + 1, sizeof(ruleset));
-    for (int i = 0; i < src->n; i++) {
+    parse_files(m, j, pak);
+    // a manifest needs "sources" (registry entries to clone), "files" (shared game files) or both
+    if ((src && src->t != J_ARR) || (!(src && src->n) && !m->ngroups)) sr_fail("%s: its manifest has no \"sources\"", pak);
+    m->nsrc = src ? src->n : 0;
+    m->sources = xmalloc(sizeof(char *) * (m->nsrc + 1));
+    m->src_rules = xcalloc(m->nsrc + 1, sizeof(ruleset));
+    for (int i = 0; i < m->nsrc; i++) {
         json *e = src->items[i];
         m->src_rules[i].n = -1;
         if (e->t == J_STR) { m->sources[i] = xstrdup(e->s); continue; }
@@ -194,7 +312,9 @@ static void parse_manifest(manifest *m, const uint8_t *data, size_t n, const cha
         parse_rules(json_get(e, "rules"), &m->src_rules[i], pak);
     }
     m->keep = str_array(json_get(j, "keep"), &m->nkeep, "keep", pak);
-    parse_rules(json_get(j, "rules"), &m->rules, pak);
+    json *rules = json_get(j, "rules");
+    if (rules || m->nsrc) parse_rules(rules, &m->rules, pak);   // (a manifest with only "files" needs no rules)
+    if (m->ngroups) m->nextra[files_kind()] = count_packages(m);
     // suit, palette, gear or ability: a manifest without an outfit (TacticalOutfits/...) that registers palettes is a
     // palette mod; one without outfits or palettes whose sources are gear (/Items/Gear/...) or abilities (an
     // Ability_* object under /Abilities/) is a gear / ability mod (a manifest with both counts as both).
@@ -301,10 +421,136 @@ static int mod_filter(const char *dir, const char *name, void *ctx)
         if (name && !_stricmp(name, TRP_NAME ".uasset")) c->panel = 1;
         return name == NULL;
     }
+    if (HAS_PREFIX(dir, "CodaGame/SuitMods/") && dir[sizeof "CodaGame/SuitMods/" - 1]) return 1;   // a mod's own files (shared file versions)
     if (_stricmp(dir, "CodaGame/SuitMods/")) return 0;
     if (!name) return 1;
     size_t n = strlen(name);
     return n > 5 && !_stricmp(name + n - 5, ".json");
+}
+
+// CodaGame/SuitMods/<name>.json (a manifest; files in subfolders are a mod's own files)
+static int is_manifest_path(const char *path)
+{
+    if (!HAS_PREFIX(path, "CodaGame/SuitMods/")) return 0;
+    const char *r = path + sizeof "CodaGame/SuitMods/" - 1;
+    size_t n = strlen(r);
+    return !strchr(r, '/') && n > 5 && !_stricmp(r + n - 5, ".json");
+}
+
+// where a manifest's shared file versions are in its pak (their sizes go into the state record)
+static void find_shared_sources(scan_result *s, manifest *m, const pak_entry *e, int ne)
+{
+    for (int g = 0; g < m->ngroups; g++)
+        for (int f = 0; f < m->groups[g].nf; f++) {
+            shared_file *sf = &m->groups[g].f[f];
+            for (int k = 0; k < ne; k++)
+                if (!_stricmp(e[k].path, sf->source)) { sf->size = e[k].usize; sf->found = 1; }
+            if (!sf->found && !m->groups[g].bad) {
+                m->groups[g].bad = 1;
+                warn(s, "%s (mod %s): its manifest lists %s, which is not in the pak - that version of its shared files is skipped",
+                     m->pak, m->title, sf->source);
+            }
+        }
+}
+
+static const char *short_name(const char *path)
+{
+    const char *s = strrchr(path, '/');
+    return s ? s + 1 : path;
+}
+
+static int find_mod(const scan_result *s, const char *id, size_t idn)
+{
+    for (int q = 0; q < s->n; q++)
+        if (strlen(s->m[q].id) == idn && !strncmp(s->m[q].id, id, idn)) return q;
+    return -1;
+}
+
+// "id" or "id@build" -> the length of the id
+static size_t with_id_len(const char *w)
+{
+    const char *at = strchr(w, '@');
+    return at ? (size_t)(at - w) : strlen(w);
+}
+
+// a version is usable when every mod it was made with is installed (with that build, when one is named)
+static int group_usable(scan_result *s, int i, int g, const char *key)
+{
+    file_group *fg = &s->m[i].groups[g];
+    if (fg->bad) return 0;
+    for (int w = 0; w < fg->nwith; w++) {
+        const char *at = strchr(fg->with[w], '@');
+        int q = find_mod(s, fg->with[w], with_id_len(fg->with[w]));
+        if (q < 0) return 0;                                    // made for a mod that isn't installed
+        if (at && (!s->m[q].build || strcmp(s->m[q].build, at + 1))) {
+            warn(s, "%s (mod %s): its version of %s was made for another build of %s (pak %s) - that version is skipped "
+                 "until the two mods match again", s->m[i].pak, s->m[i].title, short_name(key), s->m[q].title, s->m[q].pak);
+            return 0;
+        }
+    }
+    return 1;
+}
+
+static int in_with(const scan_result *s, int i, int g, const char *id)
+{
+    const file_group *fg = &s->m[i].groups[g];
+    for (int w = 0; w < fg->nwith; w++)
+        if (with_id_len(fg->with[w]) == strlen(id) && !strncmp(fg->with[w], id, strlen(id))) return 1;
+    return 0;
+}
+
+// version g of mod i beats version bg of mod bm: made with more installed mods, then the pak whose name sorts last
+static int better(const scan_result *s, int i, int g, int bm, int bg)
+{
+    int a = s->m[i].groups[g].nwith, b = s->m[bm].groups[bg].nwith;
+    if (a != b) return a > b;
+    const char *pa = strrchr(s->m[i].pak, '\\'), *pb = strrchr(s->m[bm].pak, '\\');
+    int c = _stricmp(pa ? pa + 1 : s->m[i].pak, pb ? pb + 1 : s->m[bm].pak);
+    if (c) return c > 0;
+    c = strcmp(s->m[i].id, s->m[bm].id);
+    return c ? c > 0 : g > bg;
+}
+
+static int cmp_str_ci(const void *a, const void *b) { return _stricmp(*(char *const *)a, *(char *const *)b); }
+
+// pick the version of every shared package (into s->fc, sorted by package); warns about changes that are left out
+static void choose_files(scan_result *s)
+{
+    char **keys = NULL, k[1024];
+    int nk = 0;
+    for (int i = 0; i < s->n; i++)
+        for (int g = 0; g < s->m[i].ngroups; g++)
+            for (int f = 0; f < s->m[i].groups[g].nf; f++) {
+                pkg_key(s->m[i].groups[g].f[f].target, k, sizeof k);
+                int have = 0;
+                for (int q = 0; q < nk; q++) have |= !_stricmp(keys[q], k);
+                if (!have) { keys = xrealloc(keys, sizeof(char *) * (nk + 1)); keys[nk++] = xstrdup(k); }
+            }
+    if (nk) qsort(keys, nk, sizeof *keys, cmp_str_ci);
+    for (int q = 0; q < nk; q++) {
+        int bm = -1, bg = -1;
+        for (int i = 0; i < s->n; i++)
+            for (int g = 0; g < s->m[i].ngroups; g++)
+                if (group_has(&s->m[i].groups[g], keys[q]) && group_usable(s, i, g, keys[q]) && (bm < 0 || better(s, i, g, bm, bg))) { bm = i; bg = g; }
+        // every installed mod with a version of this package should be in the one used
+        for (int i = 0; i < s->n; i++) {
+            int has = 0;
+            for (int g = 0; g < s->m[i].ngroups; g++) has |= !s->m[i].groups[g].bad && group_has(&s->m[i].groups[g], keys[q]);
+            if (!has || i == bm || (bm >= 0 && in_with(s, bm, bg, s->m[i].id))) continue;
+            if (bm < 0) warn(s, "%s (mod %s): none of its versions of %s fits the installed mods - its changes to that file are left out",
+                             s->m[i].pak, s->m[i].title, short_name(keys[q]));
+            else warn(s, "%s: no installed mod has a version with both %s's and %s's changes - %s's version is used, so %s's "
+                      "changes to it are left out (that part of %s won't work)", short_name(keys[q]), s->m[bm].title,
+                      s->m[i].title, s->m[bm].title, s->m[i].title, s->m[i].title);
+        }
+        if (bm < 0) { free(keys[q]); continue; }
+        s->fc = xrealloc(s->fc, sizeof *s->fc * (s->nfc + 1));
+        s->fc[s->nfc].key = keys[q];
+        s->fc[s->nfc].m = bm;
+        s->fc[s->nfc].g = bg;
+        s->nfc++;
+    }
+    free(keys);
 }
 
 static const wchar_t *file_name(const wchar_t *path)
@@ -402,7 +648,9 @@ static void scan(const wchar_t *paks, int full, scan_result *s)
                     if (c.registry)
                         warn(s, "%s: ships its own AssetRegistry - it conflicts with the shared registry pak (only one wins)", name8);
                     if (c.panel && !s->panel_pak) s->panel_pak = xstrdup(name8);
+                    int first = s->n;
                     for (int k = 0; k < ne; k++) {
+                        if (!is_manifest_path(e[k].path)) continue;    // a mod's own file (a shared file version)
                         size_t n = (size_t)e[k].usize;
                         uint8_t *d = pak_read(&pk, &e[k], full);
                         data = d;
@@ -416,6 +664,7 @@ static void scan(const wchar_t *paks, int full, scan_result *s)
                         free(data);
                         data = NULL;
                     }
+                    for (int q = first; q < s->n; q++) find_shared_sources(s, &s->m[q], e, ne);
                 }
             } else {
                 if (!full) s->unsure = 1;
@@ -433,6 +682,7 @@ static void scan(const wchar_t *paks, int full, scan_result *s)
     free(names);
     buf_u8(&s->game, ']');
     buf_u8(&s->game, 0);
+    choose_files(s);
 }
 
 // Threat Room options registered by the installed mods
@@ -484,6 +734,28 @@ static char *expected_state(scan_result *s)
     threatroom_status(s, tr, sizeof tr);
     buf_put(&b, "],\"threatroom\":", 15);
     json_str(&b, tr);
+    if (s->nfc) {                                               // shared game files: [path, mod id, version, size]
+        buf_put(&b, ",\"files\":[", 10);
+        int first = 1;
+        for (int c = 0; c < s->nfc; c++) {
+            manifest *m = &s->m[s->fc[c].m];
+            file_group *fg = &m->groups[s->fc[c].g];
+            for (int f = 0; f < fg->nf; f++) {
+                char k[1024], t[64];
+                pkg_key(fg->f[f].target, k, sizeof k);
+                if (_stricmp(k, s->fc[c].key)) continue;
+                if (!first) buf_u8(&b, ',');
+                first = 0;
+                buf_u8(&b, '[');
+                json_str(&b, fg->f[f].target);
+                buf_u8(&b, ',');
+                json_str(&b, m->id);
+                snprintf(t, sizeof t, ",%d,%lld]", s->fc[c].g, (long long)fg->f[f].size);
+                buf_put(&b, t, strlen(t));
+            }
+        }
+        buf_u8(&b, ']');
+    }
     buf_put(&b, "}\n", 3);                                      // (with the 0)
     free(v);
     return (char *)b.p;
@@ -603,9 +875,12 @@ static void fmt_counts(const int *cnt, char *out, size_t n)
 
 static void summary(scan_result *s, char *out, size_t n)
 {
-    int cnt[KINDS + MAXEXTRA];
+    int cnt[KINDS + MAXEXTRA], any = 0;
     tally(s, cnt);
-    fmt_counts(cnt, out, n);
+    cnt[KINDS + files_kind()] = 0;                              // (shared game files are copied, not cloned)
+    for (int k = 0; k < KINDS + NEXTRA; k++) any |= cnt[k] > 0;
+    if (any) fmt_counts(cnt, out, n);
+    else snprintf(out, n, "no registry entries");
 }
 
 static void manifest_counts(const manifest *m, char *out, size_t n)
@@ -665,7 +940,7 @@ static void overview(const int *cnt)
     char line[512] = "";
     int first = 1;
     for (int k = 0; k < KINDS + NEXTRA; k++) {
-        if (cnt[k]) continue;
+        if (cnt[k] || k == KINDS + files_kind()) continue;     // (shared game files are not cloned)
         const char *nm = kind_label(k, 1);
         if (strlen(line) + strlen(nm) + 4 > 85) {
             log_msg(C_WH "    %s%s", first ? "can also clone (none added yet): " : "                                  ", line);
@@ -716,6 +991,111 @@ static void report(scan_result *s)
         }
     }
     if (!sr_opt.full_list) log_msg(C_WH "  (the screen shows only the totals: every entry is in " C_OR "SuitRegistry.log" C_WH "; full_list=1 in options.txt shows them here)");
+}
+
+// a package path + the dir/name of a pak entry: is the entry a file of that package?
+static int entry_in_package(const char *dir, const char *name, const char *key)
+{
+    size_t dl = strlen(dir);
+    if (_strnicmp(key, dir, dl) || strchr(key + dl, '/')) return 0;
+    if (!name) return 1;
+    size_t kl = strlen(key + dl), nl = strlen(name);
+    return nl > kl && !_strnicmp(name, key + dl, kl) && name[kl] == '.' && !strchr(name + kl + 1, '.');
+}
+
+static int conflict_filter(const char *dir, const char *name, void *ctx)
+{
+    const scan_result *s = ctx;
+    for (int c = 0; c < s->nfc; c++)
+        if (entry_in_package(dir, name, s->fc[c].key)) return 1;
+    return 0;
+}
+
+// which version of each shared game file is used; paks that ship one of those files at its real path collide with it
+static void report_files(const wchar_t *paks, scan_result *s)
+{
+    if (!s->nfc) return;
+    log_msg("");
+    log_msg(C_WH "  Shared game files (the registry pak carries one version of each: the one made with the most installed mods):");
+    for (int c = 0; c < s->nfc; c++) {
+        manifest *m = &s->m[s->fc[c].m];
+        file_group *fg = &m->groups[s->fc[c].g];
+        char with[700] = "";
+        for (int w = 0; w < fg->nwith; w++) {
+            int q = find_mod(s, fg->with[w], with_id_len(fg->with[w]));
+            size_t l = strlen(with);
+            snprintf(with + l, sizeof with - l, "%s%s", w ? (w == fg->nwith - 1 ? " and " : ", ") : "", q >= 0 ? s->m[q].title : fg->with[w]);
+        }
+        log_msg("    " C_OR "%-28s" C_WH " <- %s%s%s (pak " C_OR "%s" C_WH ")", short_name(s->fc[c].key), m->title,
+                with[0] ? ", its version with " : "", with, m->pak);
+    }
+    wchar_t **names = NULL;
+    int nn = 0;
+    collect_paks(paks, L"", 0, &names, &nn);
+    for (int i = 0; i < nn; i++) {
+        if (!_wcsicmp(names[i], REG_PAK) || !_wcsicmp(names[i], REG_PAK_OLD) || is_game_pak(file_name(names[i]))) { free(names[i]); continue; }
+        wchar_t *p = wpath(paks, names[i]);
+        char *name8 = w_to_utf8(names[i]);
+        jmp_buf j, *outer = sr_jmp;
+        static pak pk;
+        memset(&pk, 0, sizeof pk);
+        sr_jmp = &j;
+        if (!setjmp(j) && pak_open(&pk, p, 1) == 0) {
+            int ne;
+            pak_entry *e = pak_list(&pk, conflict_filter, s, &ne);
+            for (int k = 0; k < ne; k++)
+                log_msg(C_RD "  warning: %s ships %s itself, which collides with the shared version above (only one of them is "
+                        "used) - remove that pak or ask its author to ship it as a shared file version" C_WH, name8, e[k].path);
+            pak_entries_free(e, ne);
+        }
+        sr_jmp = outer;
+        if (pk.h) pak_close(&pk);
+        free(name8);
+        free(p);
+        free(names[i]);
+    }
+    free(names);
+}
+
+static int shared_filter(const char *dir, const char *name, void *ctx)
+{
+    (void)name; (void)ctx;
+    return HAS_PREFIX(dir, "CodaGame/SuitMods/") && dir[sizeof "CodaGame/SuitMods/" - 1];
+}
+
+// put the chosen version of every shared package into the registry pak, at the real paths
+static void write_shared_files(const wchar_t *paks, scan_result *s, pak_writer *w)
+{
+    for (int c = 0; c < s->nfc; c++) {
+        manifest *m = &s->m[s->fc[c].m];
+        file_group *fg = &m->groups[s->fc[c].g];
+        wchar_t *pw = utf8_to_w(m->pak), *pp = wpath(paks, pw);
+        pak pk;
+        if (pak_open(&pk, pp, 1)) sr_fail("Pak %s (mod %s) could not be read again", m->pak, m->title);
+        int ne, nfiles = 0;
+        int64_t bytes = 0;
+        pak_entry *e = pak_list(&pk, shared_filter, NULL, &ne);
+        for (int f = 0; f < fg->nf; f++) {
+            char k[1024];
+            pkg_key(fg->f[f].target, k, sizeof k);
+            if (_stricmp(k, s->fc[c].key)) continue;            // (a file of another package of that version)
+            pak_entry *hit = NULL;
+            for (int q = 0; q < ne; q++) if (!_stricmp(e[q].path, fg->f[f].source)) hit = &e[q];
+            if (!hit) sr_fail("Pak %s (mod %s): %s is missing", m->pak, m->title, fg->f[f].source);
+            uint8_t *data = pak_read(&pk, hit, 1);
+            if (!data) sr_fail("Pak %s (mod %s): %s could not be read (%s)", m->pak, m->title, fg->f[f].source, sr_error);
+            pak_write_file(w, fg->f[f].target, data, (size_t)hit->usize, 1);
+            free(data);
+            nfiles++;
+            bytes += hit->usize;
+        }
+        pak_entries_free(e, ne);
+        pak_close(&pk);
+        free(pw);
+        free(pp);
+        log_msg("  " C_OR "%s" C_WH ": " C_OR "%d" C_WH " file%s (%.1f MB) from mod %s", short_name(s->fc[c].key), nfiles,
+                nfiles == 1 ? "" : "s", bytes / 1048576.0, m->title);
+    }
 }
 
 typedef struct { char *path; pak *pk; pak_entry *e; } bin_src;
@@ -788,7 +1168,7 @@ static int build(const wchar_t *paks, scan_result *s, const char *state)
     }
     jmp_buf j, *outer = sr_jmp;
     sr_jmp = &j;
-    if (setjmp(j)) { sr_jmp = outer; DeleteFileW(tmp); longjmp(*outer, 1); }
+    if (setjmp(j)) { sr_jmp = outer; pak_write_abort(w); DeleteFileW(tmp); longjmp(*outer, 1); }   // no .tmp left
     for (int q = 0; q < nb; q++) {
         uint8_t *data = pak_read(bins[q].pk, bins[q].e, 1);
         reg *r = reg_parse(data, (size_t)bins[q].e->usize);
@@ -811,6 +1191,7 @@ static int build(const wchar_t *paks, scan_result *s, const char *state)
         free(out);
     }
     if (threatroom_options(s) && !s->panel_pak) threatroom_write(pks, nn, w);
+    write_shared_files(paks, s, w);
     pak_write_file(w, STATE_PATH, (const uint8_t *)state, strlen(state), 0);
     pak_write_end(w);
     sr_jmp = outer;
@@ -828,7 +1209,13 @@ static int build(const wchar_t *paks, scan_result *s, const char *state)
 }
 
 // what changed since the installed registry pak was built (its state.json), in words
-static void log_changes(const char *have, scan_result *s)
+static const char *files_part(const char *state)
+{
+    const char *p = strstr(state, ",\"files\":");
+    return p ? p : "";
+}
+
+static void log_changes(const char *have, const char *want, scan_result *s)
 {
     json *old = json_parse(have, strlen(have));
     json *fmt = json_get(old, "format"), *game = json_get(old, "game"), *suits = json_get(old, "suits");
@@ -885,6 +1272,7 @@ static void log_changes(const char *have, scan_result *s)
     char tr[300];
     threatroom_status(s, tr, sizeof tr);
     if (!tro || !tro->s || strcmp(tro->s, tr)) { log_msg(C_OR "Reason: " C_WH "the Threat Room panel changes (%s)", tr); any = 1; }
+    if (strcmp(files_part(have), files_part(want))) { log_msg(C_OR "Reason: " C_WH "the shared game files change"); any = 1; }
     if (!any) log_msg(C_OR "Reason: the registry pak's record does not match");
     json_free(old);
 }
@@ -915,7 +1303,7 @@ int sync_run(const wchar_t *paks, int interactive)
         for (int k = i + 1; k < s.n; k++)
             if (!strcmp(s.m[i].id, s.m[k].id))
                 sr_fail("mod id %s is in two paks: %s and %s - remove one", s.m[i].id, s.m[i].pak, s.m[k].pak);
-    if (s.n) report(&s);
+    if (s.n) { report(&s); report_files(paks, &s); }
     else log_msg("No hero, suit, palette, gear, ability, character, animation, mod, effect, keyword, faction, region or other template paks found");
     int exists;
     char *have = installed_state(paks, &exists), *want = expected_state(&s);
@@ -936,7 +1324,7 @@ int sync_run(const wchar_t *paks, int interactive)
     if (have && !strcmp(have, want)) { log_msg(C_WH "Registry is up to date - nothing to do"); return 0; }
     if (!exists) log_msg(C_OR "Reason: the registry pak does not exist yet" C_WH);
     else if (!have) log_msg(C_OR "Reason: the registry pak was not built by this tool" C_WH);
-    else log_changes(have, &s);
+    else log_changes(have, want, &s);
     console_show();
     int r = build(paks, &s, want);
     if (r == 0) log_msg("\n" C_BL "Done." C_WH " Registry pak installed: " C_OR "%ls" C_WH " - the game starts now.", REG_PAK);

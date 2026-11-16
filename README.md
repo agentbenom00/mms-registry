@@ -47,6 +47,11 @@ When something changed (mod added, removed or updated, or a game update) the reb
 10 seconds); otherwise the check takes a fraction of a second. The first rebuild downloads the
 Oodle decompression library once (see Credits). Log: `%LOCALAPPDATA%\MidnightSunsSuitRegistry\SuitRegistry.log`.
 
+Leave the window open until the game starts. A rebuild that is stopped partway (the window closed, or an antivirus
+ending it) leaves a log without `Done.` at the end and can leave `zz_MidnightSuns_SuitRegistry_P.pak.tmp` in `Paks`:
+delete that file and start the game again. A rebuild that fails with an error deletes its `.tmp` itself (since 2.5.0;
+before, it stayed) and says what went wrong in the window and the log.
+
 See [README.txt](README.txt) (shipped in the zip) for the details players need.
 
 ## For mod authors
@@ -159,6 +164,40 @@ none):
 The panel's script and the patch are made by [`tools/threatroom`](tools/threatroom/README.md) from the game's own
 file. The release ships only the patch (copy and insert operations, about 12 KB), never the game file. If a game
 update changes the panel, the patch no longer applies; the registry says so and leaves the panel alone.
+
+## Shared game files (2.5.0)
+
+Some game files are changed by more than one mod. `Strategy_Master`, the Abbey map, is the usual one: each mod that
+adds a level to the Abbey streams it from there. The game loads such a file from one pak only, the one whose name
+sorts last, so two mods that each ship their own copy break each other. With 2.5.0 a mod ships its copies elsewhere
+and lets the registry choose:
+
+- Put your version of the file in a folder of your own under `CodaGame/SuitMods/` in your pak (the game ignores that
+  folder), and **don't ship the file at its real path**.
+- List it in your manifest under `"files"`, with a `"build"` that names this version of your shared files (any id
+  that changes when they change, such as a short hash of them). A manifest may have only `"files"`, no `"sources"`.
+- To work with another mod that changes the same file, ship one more version that holds both mods' changes and name
+  the other mod in its `"with"` (as `"id@build"`, so that the version is only used with exactly that build).
+
+```json
+{"format": 1, "id": "undercroft", "title": "Undercroft", "build": "e5ede65e3ef1",
+ "files": [{"with": [], "files": {
+              "CodaGame/Content/Coda/Maps/Strategy/Strategy_Master.umap": "CodaGame/SuitMods/undercroft/solo/Strategy_Master.umap",
+              "CodaGame/Content/Coda/Maps/Strategy/Strategy_Master.uexp": "CodaGame/SuitMods/undercroft/solo/Strategy_Master.uexp"}},
+           {"with": ["salem-quest@7ed4c5a3d5f5"], "files": {
+              "CodaGame/Content/Coda/Maps/Strategy/Strategy_Master.umap": "CodaGame/SuitMods/undercroft/with-salem/Strategy_Master.umap",
+              "CodaGame/Content/Coda/Maps/Strategy/Strategy_Master.uexp": "CodaGame/SuitMods/undercroft/with-salem/Strategy_Master.uexp"}}]}
+```
+
+`"files"` can also be a single `{"real path": "path in your pak"}` map: one version, made for no other mod.
+
+At each sync, a version counts only when every mod in its `"with"` is installed (at that build, when one is named).
+Of those, the version made with the most installed mods wins; on a tie, the one from the pak whose name sorts last,
+as in the game. The registry copies the winner's files into its own pak at their real paths, and the report lists
+which mod's version each shared file came from. `X.umap`/`X.uasset`, `X.uexp` and `X.ubulk` count as one file. A
+version naming a build that isn't the installed one is left out with a warning, so rebuild your combined version when
+the other mod changes. Targets must be under `CodaGame/`, and not in `CodaGame/SuitMods/`, the registry's own files or
+the Threat Room panel. When no installed mod ships shared files, the registry pak holds none.
 
 ## How it works
 

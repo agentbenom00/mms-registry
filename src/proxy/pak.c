@@ -542,8 +542,21 @@ void pak_write_end(pak_writer *w)
     wr(w, ft.p, ft.n);
     buf_free(&ft); buf_free(&pr); buf_free(&fdi); buf_free(&phi); buf_free(&enc);
     free(loc);
+    BOOL closed = CloseHandle(w->h);
+    w->h = INVALID_HANDLE_VALUE;                              // (gone either way)
+    if (!closed) sr_fail("could not finish writing the registry pak");
     for (int i = 0; i < w->n; i++) { free(w->e[i].path); free(w->e[i].bsizes); }
     free(w->e);
-    if (!CloseHandle(w->h)) sr_fail("could not finish writing the registry pak");
+    free(w);
+}
+
+// after an error while writing: close the file, so the caller can delete it (it is opened with no sharing, and a
+// delete while it is open fails - which left the half-written .tmp behind before 2.5.0), and free the writer
+void pak_write_abort(pak_writer *w)
+{
+    if (!w) return;
+    if (w->h != INVALID_HANDLE_VALUE) CloseHandle(w->h);
+    for (int i = 0; i < w->n; i++) { free(w->e[i].path); free(w->e[i].bsizes); }
+    free(w->e);
     free(w);
 }

@@ -10,7 +10,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define MMS_REGISTRY_VERSION "2.4.0"                        // the release; also in the marker and the log
+#define MMS_REGISTRY_VERSION "2.5.0"                        // the release; also in the marker and the log
 #define REG_PAK L"zz_MidnightSuns_SuitRegistry_P.pak"
 #define REG_PAK_OLD L"zzzzzzzzzz_DragonCore_EngineRegistry_P.pak"   // the previous name: removed when found
 #define STATE_PATH "CodaGame/SuitRegistry/state.json"
@@ -141,6 +141,7 @@ typedef struct pak_writer pak_writer;
 pak_writer *pak_write_begin(const wchar_t *tmp_path);       // NULL: could not create (GetLastError)
 void pak_write_file(pak_writer *w, const char *path, const uint8_t *data, size_t n, int compress);
 void pak_write_end(pak_writer *w);
+void pak_write_abort(pak_writer *w);                        // after an error: close the file (so it can be deleted), free
 
 // ---- JSON (just enough for manifests)
 typedef enum { J_NULL, J_BOOL, J_NUM, J_STR, J_ARR, J_OBJ } jtype;
